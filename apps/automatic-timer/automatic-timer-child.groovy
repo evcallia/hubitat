@@ -153,15 +153,15 @@ def overrideSwitchHandler(evt) {
 
     if (evt.value == overrideOnOffSetting) {
         if (mainControlDevice.currentValue("switch") != mainOnOffSetting) {
-            logDebug "runIn(${mainTimeSetting * 30}, delayedMainSwitchHandler)"
-            runIn(mainTimeSetting * 30, "delayedMainSwitchHandler")
+            logDebug "runIn(${mainTimeSetting * 60}, delayedMainSwitchHandler)"
+            runIn(mainTimeSetting * 60, "delayedMainSwitchHandler")
         }
     }
 
     if (evt.value != overrideOnOffSetting) {
         if (overrideTimerEnabled && overrideSwitch.currentValue("switch") != overrideOnOffSetting) {
-            logDebug "runIn(${overrideTimeSetting*30}, delayedOverrideSwitchHandler)"
-            runIn(overrideTimeSetting*30, delayedOverrideSwitchHandler)
+            logDebug "runIn(${overrideTimeSetting*60}, delayedOverrideSwitchHandler)"
+            runIn(overrideTimeSetting*60, delayedOverrideSwitchHandler)
         }
     }
 }
@@ -178,14 +178,14 @@ def mainControlDeviceHandler(evt) {
     if (evt.value != mainOnOffSetting) {
         if (overrideSwitch) {
             if (overrideSwitch.currentValue("switch") == overrideOnOffSetting) {
-                logDebug "runIn(${mainTimeSetting*30}, delayedMainSwitchHandler)"
-                runIn(mainTimeSetting*30, "delayedMainSwitchHandler")
+                logDebug "runIn(${mainTimeSetting*60}, delayedMainSwitchHandler)"
+                runIn(mainTimeSetting*60, "delayedMainSwitchHandler")
             } else {
                 logDebug "override is set, skipping delayedMainSwitchHandler"
             }
         } else {
-            logDebug "runIn(${mainTimeSetting*30}, delayedMainSwitchHandler)"
-            runIn(mainTimeSetting*30, "delayedMainSwitchHandler")
+            logDebug "runIn(${mainTimeSetting*60}, delayedMainSwitchHandler)"
+            runIn(mainTimeSetting*60, "delayedMainSwitchHandler")
         }
     } else {
         if (overrideSwitch && setOverrideOnMainSwitchChange) {
