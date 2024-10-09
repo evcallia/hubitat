@@ -10,10 +10,11 @@
  *  Features:
  *  - Automatically turn off "main" switch after set amount of time
  *  - [Optional] Configure "override switch" that will prevent timer from running
- *  - [Optional] Set the "override switch" back to default when the "main" switch changes to default state (defined as
+ *  - [Optional] Set the "override switch" back to default sate when the "main" switch changes to default state (defined as
  *      the opposite of the "mainOnOffSetting")
  *  - [Optional] Set the "override switch" back to default state (defined as the opposite of the "overrideOnOffSetting")
  *      after set amount of time
+ *  - [Optional] Configure a button to reset the timer for the "main" switch
  *
  *  TO INSTALL:
  *  Add code for parent app and then and child app (this). Install/create new instance of parent
@@ -31,11 +32,14 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2024-03-11
+ *  Last modified: 2024-10-09
  *
  *  Changelog:
  *
- *  1.0 - Initial release
+ *  1.0.0 - 2024-03-11 - Initial release
+ *  1.1.0 - 2024-10-09 - Add capability for button to reset the timer for the "main" switch
+ *                     - Fix logsEnabled bug where it always logged regardless of setting
+ *                     - Add expandable sections for various settings groups
  *
  */
 
@@ -69,7 +73,8 @@ def mainPage() {
                     "  - [Optional] Set the \"override switch\" back to default when the \"main\" switch changes to default state (defined as\n" +
                     "      the opposite of the \"mainOnOffSetting\")\n" +
                     "  - [Optional] Set the \"override switch\" back to default state (defined as the opposite of the \"overrideOnOffSetting\")\n" +
-                    "      after set amount of time"
+                    "      after set amount of time" +
+                    "  - [Optional] Configure a button to reset the timer for the \"main\" switch"
             label description: "Name for this Automatic Timer instance", required: true
         }
 
@@ -82,7 +87,24 @@ def mainPage() {
                     options: ["off", "on"]
         }
 
-        section("\"Override Switch\" Configuration") {
+        section("\"Reset Button\" Configuration", hideable: true, hidden: false) {
+            input name: "resetButtonDevice", type: "capability.pushableButton", title: "Button to reset the timer for " +
+                    "the \"main\" switch", submitOnChange: true
+            if (settings.resetButtonDevice != null) {
+                logDebug "resetButton: ${settings.resetButtonDevice}; numberOfButtons: ${settings.resetButtonDevice.numberOfButtons}"
+
+                def numButtons = resetButtonDevice.currentValue("numberOfButtons")
+                input name: "resetButtonNumber", type: "enum", title: "Which button number", required: true,
+                        options: (1..numButtons).collect { ["$it": "Button $it"] }
+
+                input "buttonActionType", "enum", title: "Which action type", options: ["pushed", "doubleTapped"], required: true
+            } else {
+                app.removeSetting("resetButtonNumber")
+                app.removeSetting("buttonActionType")
+            }
+        }
+
+        section("\"Override Switch\" Configuration", hideable: true, hidden: false) {
             input name: "overrideSwitch", type: "capability.switch", title: "Only preform action when this switch " +
                     "is set", submitOnChange: true
             if (settings.overrideSwitch != null) {
@@ -133,10 +155,21 @@ def initialize() {
 
     logDebug "subscribe: overrideSwitchHandler"
     subscribe(overrideSwitch, "switch", "overrideSwitchHandler")
+
+    logDebug "subscribe: buttonResetHandler"
+    subscribe(resetButtonDevice, buttonActionType, "buttonResetHandler")
 }
 
 def uninstalled() {
     log.debug "uninstalled()"
+}
+
+def buttonResetHandler(evt) {
+    logDebug "buttonResetHandler() called: ${evt.name} ${evt.value}"
+
+    if (evt.name == buttonActionType && evt.value == resetButtonNumber) {
+        checkAndSchedule(mainControlDevice.currentValue("switch"))
+    }
 }
 
 def overrideSwitchHandler(evt) {
@@ -168,6 +201,11 @@ def overrideSwitchHandler(evt) {
 
 def mainControlDeviceHandler(evt) {
     logDebug "mainControlDeviceHandler() called: ${evt.name} ${evt.value}"
+    checkAndSchedule(evt.value)
+}
+
+def checkAndSchedule(mainControlDeviceValue) {
+    logDebug "checkAndSchedule() called: mainControlDeviceValue: ${mainControlDeviceValue}"
 
     // Unschedule no matter what
     // 1. If device is meant to be turned off in 5 min and then turns off, we don't need to keep timing
@@ -175,7 +213,7 @@ def mainControlDeviceHandler(evt) {
     logDebug "unschedule(delayedMainSwitchHandler)"
     unschedule("delayedMainSwitchHandler")
 
-    if (evt.value != mainOnOffSetting) {
+    if (mainControlDeviceValue != mainOnOffSetting) {
         if (overrideSwitch) {
             if (overrideSwitch.currentValue("switch") == overrideOnOffSetting) {
                 logDebug "runIn(${mainTimeSetting*60}, delayedMainSwitchHandler)"
@@ -224,5 +262,7 @@ def delayedOverrideSwitchHandler() {
 }
 
 void logDebug(msg) {
-    log.debug(msg)
+    if (logsEnabled) {
+        log.debug(msg)
+    }
 }
