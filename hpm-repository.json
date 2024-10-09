@@ -1,0 +1,18 @@
+{
+  "author": "Evan Callia",
+  "gitHubUrl": "https://github.com/evcallia/hubitat/tree/main",
+  "payPalUrl": "https://www.paypal.com/donate/?business=35CKN8NZYERZY&no_recurring=0&currency_code=USD",
+  "packages": [
+    {
+      "id": "8df6e5ba-3ccc-485d-8f98-6da9b96c74c6",
+      "name": "Automatic Timer",
+      "category": "Convenience",
+      "location": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/apps/automatic-timer/hpm-packageManifest.json",
+      "description": "This app is designed to be used as a timer to automatically turn on/off a switch after a configurable amount of time. Optionally, you may configure an override switch which prevents the timer from running.",
+      "tags": [
+        "Timers",
+        "Lights & Switches"
+      ]
+    }
+  ]
+}
