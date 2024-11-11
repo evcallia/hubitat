@@ -19,6 +19,8 @@ desired.
 ## Usage
 Add code for parent app and then and child app. Install/create new instance of parent app and begin using.
 
+You may also install via Hubitat Package Manager. Search for "Automatic Timer" and follow installation instructions.
+
 ### Example
 Here we'll walk through the setup of an app
 
