@@ -18,7 +18,7 @@
  *
  *  TO INSTALL:
  *  Add code for parent app and then and child app (this). Install/create new instance of parent
- *  app and begin using.
+ *  app and begin using. This app may also be installed via Hubitat Package Manager (preferred).
  *
  *  Copyright 2024 Evan Callia
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
