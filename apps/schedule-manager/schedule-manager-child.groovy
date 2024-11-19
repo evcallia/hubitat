@@ -33,6 +33,14 @@
  *
  * =======================================================================================
  *
+ *  NOTICE: This file has been modified by *Evan Callia* under compliance with
+ *  the Apache 2.0 License from the original work of *Switch Scheduler and More*.
+ *
+ * Below link is for original source (@kampto)
+ * https://github.com/kampto/Hubitat/blob/main/Apps/Switch%20Scheduler%20and%20More
+ *
+ * =======================================================================================
+ *
  *  Last modified: 2024-11-18
  *
  *  Changelog:
