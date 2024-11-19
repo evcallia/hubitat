@@ -42,16 +42,17 @@
  */
 
 def titleVersion() {
-    state.name = "Schedule Manager (Schedule Lights, Outlets and Switches)"
+    state.name = "Schedule Manager"
     state.version = "1.0.0"
 }
 
 definition(
         name: "Schedule Manager (Child App)",
+        label: "Schedule Manager Instance",
         namespace: "evcallia",
         author: "Evan Callia",
         description: "Child app for schedule manager",
-        category: "Convenience",
+        category: "Control",
         parent: "evcallia:Schedule Manager",
         iconUrl: "",
         iconX2Url: ""
@@ -70,7 +71,7 @@ def mainPage() {
 
     if (state.devices == null) state.devices = [:]
 
-    if (logEnableBool) {log.info "${app.label} - Main Page Refresh. Devices: ${devices}"}
+    if (logEnableBool) { logDebug "Main Page Refresh. Devices: ${devices}" }
 
     dynamicPage(name: "mainPage", title: "", install: true, uninstall: true) {
         displayTitle()
@@ -325,7 +326,7 @@ String displayTable() {
     // Desired State
     if (state.desiredState) {
         def (deviceId, scheduleId) = state.desiredState.tokenize('|')
-        log.info "$deviceId|$scheduleId; ${state.devices[deviceId].schedules[scheduleId]}"
+        logDebug "$deviceId|$scheduleId; ${state.devices[deviceId].schedules[scheduleId]}"
         if (state.devices[deviceId].schedules[scheduleId].desiredState == "on") {
             state.devices[deviceId].schedules[scheduleId].desiredState = "off"
         } else {
@@ -409,7 +410,7 @@ String displayTable() {
                             // Try the other format
                             return new Date().parse("EEE MMM dd HH:mm:ss zzz yyyy", dateStr)
                         } catch (Exception e2) {
-                            log.error "Failed to parse date: ${dateStr}"
+                            logError "Failed to parse date: ${dateStr}"
                             return null
                         }
                     }
@@ -424,7 +425,7 @@ String displayTable() {
                 }
                 return 0
             } catch (Exception e) {
-                log.error "Error in sorting schedule dates: ${e.message}"
+                logError "Error in sorting schedule dates: ${e.message}"
                 return 0
             }
         }
@@ -498,11 +499,11 @@ String displayTable() {
 //**** Handlers ****//
 
 void switchHandler(data) {
-    if (logEnableBool) log.info "switchHandler - data: $data"
+    if (logEnableBool) logDebug "switchHandler - data: $data"
 
     // If this is set, crons should not even be schedules but we'll check anyways
     if (pauseBool) {
-        if (logEnableBool) log.debug "${app.label} - All schedules have been manually paused. Skipping."
+        if (logEnableBool) logDebug "All schedules have been manually paused. Skipping."
         return
     }
 
@@ -513,38 +514,38 @@ void switchHandler(data) {
     if ((modeBool && mode.contains(location.mode)) || (!modeBool)) {
         if ((switchActivationBool && activationSwitch.currentSwitch == activationSwitchOnOff) || (!switchActivationBool)) {
             if (!schedule.pause) { // If schedule is paused it should never be scheduled anyway. We'll still check.
-                if (logEnableBool) log.debug "${app.label} - switchHandler - Device: $device; schedule: $schedule"
+                logDebug "switchHandler - Device: $device; schedule: $schedule"
                 if (schedule.desiredState == "on") {
                     if (deviceConfig.capability == "Dimmer") {
                         if (activateOnBeforeLevelBool) {
                             device.on()
-                            if (logEnableBool) log.debug "${app.label} - $device turned on"
+                            logDebug "$device turned on"
                         }
                         device.setLevel(schedule.desiredLevel)
-                        if (logEnableBool) log.debug "${app.label} - $device set to $schedule.desiredLevel"
+                        logDebug "$device set to $schedule.desiredLevel"
                     } else {
                         device.on()
-                        if (logEnableBool) log.debug "${app.label} - $device turned on"
+                        logDebug "$device turned on"
                     }
                 } else {
                     device.off()
-                    if (logEnableBool) log.debug "${app.label} - $device turned off"
+                    logDebug "$device turned off"
                 }
             } else {
                 // If schedule is paused it should never be scheduled anyway
-                if (logEnableBool) log.info "Schedule is paused, skipping run for Device: $device; schedule: $schedule"
+                logDebug "Schedule is paused, skipping run for Device: $device; schedule: $schedule"
             }
         } else {
-            if (logEnableBool) log.info "Switch $activationSwitch is not set to $activationSwitchOnOff, skipping run for Device: $device; schedule: $schedule"
+            logDebug "Switch $activationSwitch is not set to $activationSwitchOnOff, skipping run for Device: $device; schedule: $schedule"
         }
     } else {
-        if (logEnableBool) log.info "Mode of $location.mode is not one of $mode, skipping run for Device: $device; schedule: $schedule"
+        logDebug "Mode of $location.mode is not one of $mode, skipping run for Device: $device; schedule: $schedule"
     }
 }
 
 // Get new sunrise/sunset times every day
 def sunHandler(evt) {
-    if (logEnableBool) log.debug "sunHandler called"
+    logDebug "sunHandler called"
     devices.each { dev ->
         state.devices["$dev.id"]["schedules"].each { scheduleId, schedule ->
             if (schedule.sunTime) {
@@ -561,8 +562,8 @@ def sunHandler(evt) {
 }
 
 def logsOff() {
-    log.debug "logsOff called"
-    log.info "${app.label} - All App logging auto disabled"
+    logDebug "logsOff() called"
+    logDnfo "All App logging auto disabled"
     app?.updateSetting("logEnableBool", [value: "false", type: "bool"])
 }
 
@@ -602,7 +603,7 @@ void appButtonHandler(btn) {
 //**** Functions ****//
 
 def buildCron() {
-    if (logEnableBool) log.debug "buildCron called"
+    logDebug "buildCron called"
 
     state.devices.each { deviceId, deviceConfigs ->
         deviceConfigs.schedules.each { scheduleId, schedule ->
@@ -624,7 +625,7 @@ def buildCron() {
                     days = days.substring(0, days.length() - 1) // Chop off last ","
                     schedule.days = days
                     schedule.cron = "0 ${minutes} ${hours} ? * ${days} *"
-                    if (logEnableBool) log.info "deviceId: $deviceId; scheduleId: $scheduleId; Generated cron: ${schedule.cron}"
+                    logDebug "deviceId: $deviceId; scheduleId: $scheduleId; Generated cron: ${schedule.cron}"
                 }
             }
         }
@@ -671,23 +672,41 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
 
 def displayTitle() {
     titleVersion()
-    section(getFormat("title", "App: ${state.name} - ${"ver " + state.version}")) {}
+
+    String str = ""
+    if (pauseBool) {
+        str += getFormat("noticable", "<h3>[App Paused]</h3>")
+    }
+    str += getFormat("blueRegular", "${app.label ? app.label + ' - ' : ""}${state.name}: ${"ver " + state.version}")
+    section (str) {}
+}
+
+void logDebug(msg) {
+    if (logEnableBool) {
+        log.debug("${app.label} - $msg")
+    }
+}
+
+void logError(msg) {
+    if (logEnableBool) {
+        log.error("${app.label} - $msg")
+    }
 }
 
 
 //**** Required Methods ****//
 
 void initialize() {
-    if (logEnableBool) log.debug "initialize() called"
+    logDebug "initialize() called"
 
     if (pauseBool) {
-        if (logEnableBool) log.info "All schedules have been manually paused. Will skip scheduling"
+        logDebug "All schedules have been manually paused. Will skip scheduling"
         return
     }
 
     schedule("0 0 1 ? * * *", sunHandler)   // Every day at 1am to get new sunrise/sunset times
 
-    if (logEnableBool) log.info state.devices
+    logDebug state.devices
 
     // Set device cron schedules
     devices.sort { it.displayName.toLowerCase() }.each { dev ->
@@ -696,14 +715,14 @@ void initialize() {
         deviceConfig.schedules.each { scheduleId, sched ->
             if (sched.cron && !sched.pause) {
                 schedule(sched.cron, switchHandler, [data:[deviceId: dev.id, scheduleId: scheduleId], overwrite:false])
-                if (logEnableBool) log.info "${app.label} - SCHEDULED Device: $dev; DeviceId: $dev.id; ScheduleId: $scheduleId; deviceSchedule: $sched"
+                logDebug "SCHEDULED Device: $dev; DeviceId: $dev.id; ScheduleId: $scheduleId; deviceSchedule: $sched"
             }
         }
     }
 }
 
 def updated() {  // runs every 'Done' on already installed app
-    if (logEnableBool) log.debug "updated called"
+    logDebug "updated called"
     unsubscribe()
     unschedule(switchHandler)  // cancels all(or one) scheduled jobs including runIn
     unschedule(sunHandler)  // sunrise/set check
@@ -713,6 +732,6 @@ def updated() {  // runs every 'Done' on already installed app
 }
 
 def installed() {  // only runs once for new app 'Done' or first time open
-    if (logEnableBool) log.debug "installed called"
+    logDebug "installed called"
     updated()
 }

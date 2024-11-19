@@ -48,7 +48,7 @@ definition(
         singleInstance: true,
         installOnOpen: true,
         description: "Configure schedules for devices - Parent",
-        category: "Convenience",
+        category: "Control",
         iconUrl: "",
         iconX2Url: ""
 )
