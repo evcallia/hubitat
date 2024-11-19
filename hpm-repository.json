@@ -13,6 +13,16 @@
         "Timers",
         "Lights & Switches"
       ]
+    },
+    {
+      "id": "e214cac5-b7c8-4aac-b996-ef8f42d71d12",
+      "name": "Schedule manager",
+      "category": "Control",
+      "location": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/apps/schedule-manager/hpm-packageManifest.json",
+      "description": "Use this app to schedule switches, outlets and lights. Optionally configure modes and overrides.",
+      "tags": [
+        "Lights & Switches"
+      ]
     }
   ]
 }
