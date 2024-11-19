@@ -6,5 +6,25 @@
   "dateReleased": "2024-11-18",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
   "documentationLink": "https://github.com/evcallia/hubitat/blob/main/apps/schedule-manager/README.md",
-  "communityLink": "https://community.hubitat.com/t/release-schedule-manager-app/145646"
+  "communityLink": "https://community.hubitat.com/t/release-schedule-manager-app/145646",
+  "apps": [
+    {
+      "id": "ae6dbcf3-7b18-4ecc-9fb7-418032ff8d19",
+      "name": "Schedule Manager",
+      "namespace": "evcallia",
+      "location": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/apps/schedule-manager/schedule-manager-parent.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": true
+    },
+    {
+      "id": "828acbeb-8fbb-41e6-9416-a1e94787ca98",
+      "name": "ScheduleManager (Child App)",
+      "namespace": "evcallia",
+      "location": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/apps/schedule-manager/schedule-manager-child.groovy",
+      "required": true,
+      "oauth": false,
+      "primary": false
+    }
+  ]
 }
