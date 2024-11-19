@@ -19,7 +19,7 @@
     },
     {
       "id": "828acbeb-8fbb-41e6-9416-a1e94787ca98",
-      "name": "ScheduleManager (Child App)",
+      "name": "Schedule Manager (Child App)",
       "namespace": "evcallia",
       "location": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/apps/schedule-manager/schedule-manager-child.groovy",
       "required": true,
