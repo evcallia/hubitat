@@ -4,7 +4,7 @@
   "version": "1.1.0",
   "minimumHEVersion": "0.0.0",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
-  "documentationLink": "https://github.com/evcallia/hubitat/blob/main/README.md",
+  "documentationLink": "https://github.com/evcallia/hubitat/blob/main/apps/automatic-timer/README.md",
   "communityLink": "https://community.hubitat.com/t/release-automatic-timer-app-w-override/134049",
   "dateReleased": "2024-02-19",
   "apps": [
