@@ -1,0 +1,10 @@
+{
+  "packageName": "Schedule Manager",
+  "author": "Evan Callia",
+  "version": "1.0.0",
+  "minimumHEVersion": "0.0.0",
+  "dateReleased": "2024-11-18",
+  "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
+  "documentationLink": "https://github.com/evcallia/hubitat/blob/main/apps/schedule-manager/README.md",
+  "communityLink": "https://community.hubitat.com/t/release-schedule-manager-app/145646"
+}
