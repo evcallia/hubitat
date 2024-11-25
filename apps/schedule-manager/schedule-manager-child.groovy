@@ -41,11 +41,14 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2024-11-18
+ *  Last modified: 2024-11-25
  *
  *  Changelog:
  *
  *  1.0.0 - 2024-11-18 - Initial release
+ *  1.0.1 - 2024-11-25 - Fix typo when logging
+ *                     - Fix sunrise/set offset not accounted for
+ *                     - Fix issue where sunrise/set wasn't updated daily
  *
  */
 
@@ -122,7 +125,7 @@ def mainPage() {
 
                 // Input Start Time
                 if (state.newStartTime) {
-                    input name: "newStartTime", type: "time", title: getFormat("noticable", "<b>Enter Start/On Time, Applies to all checked days for Switch.<br><small>Uses 24hr time, &nbsp Hit Update</small>"), defaultValue: "", required: false, submitOnChange: true, width: 5, newLineAfter: true, style: 'margin-left:10px'
+                    input name: "newStartTime", type: "time", title: getFormat("noticable", "<b>Enter Start/On Time, Applies to all checked days for Switch.<br><small>Uses 24hr time, &nbsp Hit Update</small>"), required: false, submitOnChange: true, width: 5, newLineAfter: true, style: 'margin-left:10px'
                     if (newStartTime) {
                         def (deviceId, scheduleId) = state.newStartTime.tokenize('|')
                         state.devices[deviceId].schedules[scheduleId].startTime = newStartTime
@@ -134,7 +137,7 @@ def mainPage() {
 
                 // Sunrise / Sunset Offset time
                 if (state.newOffsetTime) {
-                    input name: "newOffsetTime", type: "number", title: getFormat("noticable", "<b>Enter +/- Offset time from Sunrise or Sunset in minutes. Applies to all checked days for Switch.<br><small>EX: 30, -30, or -90, &nbsp Hit Enter</small>"), defaultValue: 0, required: false, submitOnChange: true, accepts: "-1000 to 1000", range: "-1000..1000", width: 8, newLineAfter: true, style: 'margin-left:10px'
+                    input name: "newOffsetTime", type: "number", title: getFormat("noticable", "<b>Enter +/- Offset time from Sunrise or Sunset in minutes. Applies to all checked days for Switch.<br><small>EX: 30, -30, or -90, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "-1000 to 1000", range: "-1000..1000", width: 8, newLineAfter: true, style: 'margin-left:10px'
                     if (newOffsetTime) {
                         def (deviceId, scheduleId) = state.newOffsetTime.tokenize('|')
                         state.devices[deviceId].schedules[scheduleId].offset = newOffsetTime
@@ -146,7 +149,7 @@ def mainPage() {
 
                 // Desired Level
                 if (state.desiredLevel) {
-                    input name: "desiredLevel", type: "number", title: getFormat("noticable", "<b>Enter a number between 1-100 for the desired dimmer level. Applies to all checked days for Dimmer.<br><small>EX: 1, 50, or 100, &nbsp Hit Enter</small>"), defaultValue: 0, required: false, submitOnChange: true, accepts: "0 to 100", range: "0..100", width: 8, newLineAfter: true, style: 'margin-left:10px'
+                    input name: "desiredLevel", type: "number", title: getFormat("noticable", "<b>Enter a number between 1-100 for the desired dimmer level. Applies to all checked days for Dimmer.<br><small>EX: 1, 50, or 100, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "0 to 100", range: "0..100", width: 8, newLineAfter: true, style: 'margin-left:10px'
                     if (desiredLevel) {
                         def (deviceId, scheduleId) = state.desiredLevel.tokenize('|')
                         state.devices[deviceId].schedules[scheduleId].desiredLevel = desiredLevel
@@ -394,18 +397,7 @@ String displayTable() {
         str += "<td rowspan='$scheduleCount' style='border-right:2px solid black' title='Click to add new time for this device'>$addNewRunButton</td>"
 
         //**** Update sunrise/set times and order schedules ****//
-
-        // Set updated sunrise/set times if option is set for schedule
-        offsetRiseAndSet = getSunriseAndSunset(sunriseOffset: state.devices["$dev.id"].offset, sunsetOffset: state.devices["$dev.id"].offset)
-        state.devices["$dev.id"].schedules.each { scheduleId, schedule ->
-            if (schedule.sunTime) {
-                if (schedule.sunset) {
-                    schedule.startTime = offsetRiseAndSet.sunset.toString()
-                } else {
-                    schedule.startTime = offsetRiseAndSet.sunrise.toString()
-                }
-            }
-        }
+        updateSunriseAndSet()
 
         def sortedSchedules = state.devices["$dev.id"].schedules.sort { a, b ->
             try {
@@ -554,24 +546,12 @@ void switchHandler(data) {
 // Get new sunrise/sunset times every day
 def sunHandler(evt) {
     logDebug "sunHandler called"
-    devices.each { dev ->
-        state.devices["$dev.id"]["schedules"].each { scheduleId, schedule ->
-            if (schedule.sunTime) {
-                def offsetRiseAndSet = getSunriseAndSunset(sunriseOffset: schedule.offset, sunsetOffset: schedule.offset)
-                if (schedule.sunset) {
-                    schedule.startTime = offsetRiseAndSet.sunset.toString()
-                } else {
-                    schedule.startTime = offsetRiseAndSet.sunrise.toString()
-                }
-            }
-        }
-    }
+    updateSunriseAndSet()
     updated()  // Rebuild cron with new sunrise/set schedules
 }
 
 def logsOff() {
-    logDebug "logsOff() called"
-    logDnfo "All App logging auto disabled"
+    logDebug "logsOff() called - All App logging auto disabled"
     app?.updateSetting("logEnableBool", [value: "false", type: "bool"])
 }
 
@@ -609,6 +589,21 @@ void appButtonHandler(btn) {
 
 
 //**** Functions ****//
+
+def updateSunriseAndSet() {
+    devices.each { dev ->
+        state.devices["$dev.id"].schedules.each { scheduleId, schedule ->
+            if (schedule.sunTime) {
+                def offsetRiseAndSet = getSunriseAndSunset(sunriseOffset: schedule.offset, sunsetOffset: schedule.offset)
+                if (schedule.sunset) {
+                    schedule.startTime = offsetRiseAndSet.sunset.toString()
+                } else {
+                    schedule.startTime = offsetRiseAndSet.sunrise.toString()
+                }
+            }
+        }
+    }
+}
 
 def buildCron() {
     logDebug "buildCron called"
