@@ -49,6 +49,9 @@
  *  1.0.1 - 2024-11-25 - Fix typo when logging
  *                     - Fix sunrise/set offset not accounted for
  *                     - Fix issue where sunrise/set wasn't updated daily
+ *  1.1.0 - 2024-12-31 - BREAKING CHANGE - App name will be reset
+ *                     - Show "(paused)" in app name when app is paused
+ *                     - Additional error handling for default schedules and when new devices are added to a schedule
  *
  */
 
@@ -86,9 +89,19 @@ def mainPage() {
 
     dynamicPage(name: "mainPage", title: "", install: true, uninstall: true) {
         displayTitle()
+
         section(getFormat("header", "Initial Set-Up"), hideable: true, hidden: hide) {
-            label title: "<b>Name this App</b>", required: true, submitOnChange: true, width: 3
+            input name: "appName", type: "string", title: "<b>Name this App</b>", required: true, submitOnChange: true, width: 3
             input "devices", "capability.switch, capability.SwitchLevel", title: "<b>Select Devices schedule</b>", required: true, multiple: true, submitOnChange: true, width: 6
+
+            if (appName) {
+                String label = appName
+                if (pauseBool) {
+                    label += " <span style='color:red'>(Paused)</span>"
+                }
+                app.updateLabel(label)
+                updated()
+            }
 
             devices.each { dev ->
                 if (!state.devices["$dev.id"]) {
@@ -680,7 +693,7 @@ def displayTitle() {
     if (pauseBool) {
         str += getFormat("noticable", "<h3>[App Paused]</h3>")
     }
-    str += getFormat("blueRegular", "${app.label ? app.label + ' - ' : ""}${state.name}: ${"ver " + state.version}")
+    str += getFormat("blueRegular", "${appName ? appName + ' - ' : ""}${state.name}: ${"ver " + state.version}")
     section (str) {}
 }
 
@@ -714,11 +727,13 @@ void initialize() {
     // Set device cron schedules
     devices.sort { it.displayName.toLowerCase() }.each { dev ->
         deviceConfig = state.devices["$dev.id"]
-        zone = deviceConfig.zone
-        deviceConfig.schedules.each { scheduleId, sched ->
-            if (sched.cron && !sched.pause) {
-                schedule(sched.cron, switchHandler, [data:[deviceId: dev.id, scheduleId: scheduleId], overwrite:false])
-                logDebug "SCHEDULED Device: $dev; DeviceId: $dev.id; ScheduleId: $scheduleId; deviceSchedule: $sched"
+        if (deviceConfig != null) { // Can happen when adding a new device that doesn't yet have a default config
+            zone = deviceConfig.zone
+            deviceConfig.schedules.each { scheduleId, sched ->
+                if (sched.cron && !sched.pause && !sched.cron.contains("Sel")) {
+                    schedule(sched.cron, switchHandler, [data:[deviceId: dev.id, scheduleId: scheduleId], overwrite:false])
+                    logDebug "SCHEDULED Device: $dev; DeviceId: $dev.id; ScheduleId: $scheduleId; deviceSchedule: $sched"
+                }
             }
         }
     }

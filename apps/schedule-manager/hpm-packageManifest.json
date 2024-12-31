@@ -1,7 +1,7 @@
 {
   "packageName": "Schedule Manager",
   "author": "Evan Callia",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "minimumHEVersion": "0.0.0",
   "dateReleased": "2024-11-18",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
