@@ -52,6 +52,15 @@
  *  1.1.0 - 2024-12-31 - BREAKING CHANGE - App name will be reset
  *                     - Show "(paused)" in app name when app is paused
  *                     - Additional error handling for default schedules and when new devices are added to a schedule
+ *  2.0.0 - 2025-04-01 - BREAKING CHANGE - Sunrise/set times will not update unless app is re-saved. It will still run, just using the sunrise/set values at the time the app was updated.
+ *                     - Additional error handling for default schedules and when new devices are added to a schedule
+ *                     - Support for Hub Variables (datetime) used as start time
+ *                       - This allows users to select a Hub Variable to be used as the start time for schedules
+ *                       - Can use datetime, time or date (at midnight)
+ *                       - Supports variable renaming
+ *                       - Registers the use of a Hub Variable with the Hub
+ *                       - Update schedules when the Hub Variable changes
+ *                     - Fix null pointer that happened occasionally when a new device was added
  *
  */
 
@@ -94,15 +103,6 @@ def mainPage() {
             input name: "appName", type: "string", title: "<b>Name this App</b>", required: true, submitOnChange: true, width: 3
             input "devices", "capability.switch, capability.SwitchLevel", title: "<b>Select Devices schedule</b>", required: true, multiple: true, submitOnChange: true, width: 6
 
-            if (appName) {
-                String label = appName
-                if (pauseBool) {
-                    label += " <span style='color:red'>(Paused)</span>"
-                }
-                app.updateLabel(label)
-                updated()
-            }
-
             devices.each { dev ->
                 if (!state.devices["$dev.id"]) {
                     state.devices["$dev.id"] = [
@@ -113,6 +113,15 @@ def mainPage() {
                         ],
                     ]
                 }
+            }
+
+            if (appName) {
+                String label = appName
+                if (pauseBool) {
+                    label += " <span style='color:red'>(Paused)</span>"
+                }
+                app.updateLabel(label)
+                updated()
             }
         }
 
@@ -148,7 +157,7 @@ def mainPage() {
                     }
                 }
 
-                // Sunrise / Sunset Offset time
+                // Sunrise/Sunset or variable offset time
                 if (state.newOffsetTime) {
                     input name: "newOffsetTime", type: "number", title: getFormat("noticable", "<b>Enter +/- Offset time from Sunrise or Sunset in minutes. Applies to all checked days for Switch.<br><small>EX: 30, -30, or -90, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "-1000 to 1000", range: "-1000..1000", width: 8, newLineAfter: true, style: 'margin-left:10px'
                     if (newOffsetTime) {
@@ -162,12 +171,23 @@ def mainPage() {
 
                 // Desired Level
                 if (state.desiredLevel) {
-                    input name: "desiredLevel", type: "number", title: getFormat("noticable", "<b>Enter a number between 1-100 for the desired dimmer level. Applies to all checked days for Dimmer.<br><small>EX: 1, 50, or 100, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "0 to 100", range: "0..100", width: 8, newLineAfter: true, style: 'margin-left:10px'
+                    input name: "desiredLevel", type: "number", title: getFormat("noticable", "<b>Enter a number between 1-100 for the desired dimmer level. Applies to all checked days for Dimmer.</b><br><small>EX: 1, 50, or 100, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "0 to 100", range: "0..100", width: 8, newLineAfter: true, style: 'margin-left:10px'
                     if (desiredLevel) {
                         def (deviceId, scheduleId) = state.desiredLevel.tokenize('|')
                         state.devices[deviceId].schedules[scheduleId].desiredLevel = desiredLevel
                         state.remove("desiredLevel")
                         app.removeSetting("desiredLevel")
+                        paragraph "<script>{changeSubmit(this)}</script>"
+                    }
+                }
+
+                if (state.selectVariableStartTime) {
+                    input name: "newVariableTime", type: "enum", title: getFormat("noticable", "<b>Select Hub Variable</b>"), options: getHubVariableList(), required: false, submitOnChange: true, width: 8, newLineAfter: true, style: 'margin-left:10px'
+                    if (newVariableTime) {
+                        def (deviceId, scheduleId) = state.selectVariableStartTime.tokenize('|')
+                        state.devices[deviceId].schedules[scheduleId].variableTime = newVariableTime
+                        state.remove("selectVariableStartTime")
+                        app.removeSetting("newVariableTime")
                         paragraph "<script>{changeSubmit(this)}</script>"
                     }
                 }
@@ -317,6 +337,31 @@ String displayTable() {
         state.remove("sunsetUnCheckedBox")
     }
 
+    // Variable time
+    if (state.useVariableTimeChecked) {
+        def (deviceId, scheduleId) = state.useVariableTimeChecked.tokenize('|')
+        logDebug "deviceId $deviceId; scheduleId: $scheduleId"
+        logDebug "state.devices[deviceId]: ${state.devices[deviceId]}"
+        logDebug "state.devices[deviceId].schedules: ${state.devices[deviceId].schedules}"
+        logDebug "state.devices[deviceId].schedules[scheduleId]: ${state.devices[deviceId].schedules[scheduleId]}"
+        state.devices[deviceId].schedules[scheduleId].useVariableTime = true
+        state.remove("useVariableTimeChecked")
+    } else if (state.useVariableTimeUnChecked) {
+        def (deviceId, scheduleId) = state.useVariableTimeUnChecked.tokenize('|')
+        state.devices[deviceId].schedules[scheduleId].useVariableTime = false
+        state.remove("useVariableTimeUnChecked")
+    }
+
+    if (state.sunsetCheckedBox) {
+        def (deviceId, scheduleId) = state.sunsetCheckedBox.tokenize('|')
+        state.devices[deviceId].schedules[scheduleId].sunset = true
+        state.remove("sunsetCheckedBox")
+    } else if (state.sunsetUnCheckedBox) {
+        def (deviceId, scheduleId) = state.sunsetUnCheckedBox.tokenize('|')
+        state.devices[deviceId].schedules[scheduleId].sunset = false
+        state.remove("sunsetUnCheckedBox")
+    }
+
     // Add/Remove Run Times
     if (state.addRunTime) {
         def deviceId = state.addRunTime
@@ -369,6 +414,7 @@ String displayTable() {
             "<th>Type</th>" +
             "<th style='border-right:2px solid black'>Add<br>Run</th>" +
             "<th style='width: 60px !important'>Run<br>Time</th>" +
+            "<th>Use Hub<br>Variable?</th>" +
             "<th>Use Sun<br>Set/Rise?</th>" +
             "<th>Rise or<br>Set?</th>" +
             "<th>Offset<br>+/-Min</th>" +
@@ -446,12 +492,35 @@ String displayTable() {
         //**** Iterate each schedule, configuring the 'schedule' section of the table ****//
 
         sortedSchedules.each { scheduleId, schedule ->
-            String thisStartTime = schedule.startTime.substring(11, schedule.startTime.length() - 12)
+            String thisStartTime = getTimeFromDateTimeString(schedule.startTime)
             String thisOffsetTime = schedule.offset
-            String deviceAndScheduleId = "$dev.id|$scheduleId"
+            String deviceAndScheduleId = "${dev.id}|$scheduleId"
 
             if (schedule.sunTime) {
                 startTime = thisStartTime
+            } else if (schedule.useVariableTime) {
+                if (schedule.variableTime) {
+                    def variableValue = getValueForHubVariable(schedule.variableTime)
+                    if (variableValue == null) {
+                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select<br>Variable", "MediumBlue")
+                    } else {
+                        def dtString = ""
+                        def date = getDateFromDateTimeString(schedule.startTime)
+                        if (!date.equals("9999-99-99")) {
+                            dtString += "$date"
+                        }
+                        def time = getTimeFromDateTimeString(schedule.startTime)
+                        if (!time.equals("99:99")) {
+                            if (dtString.length() > 0) {
+                                dtString += "<br>"
+                            }
+                            dtString += time
+                        }
+                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "${schedule.variableTime}<br>($dtString)", "MediumBlue")
+                    }
+                } else {
+                    startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select<br>Variable", "MediumBlue")
+                }
             } else {
                 startTime = buttonLink("editStartTime|$deviceAndScheduleId", thisStartTime, "MediumBlue")
             }
@@ -464,6 +533,7 @@ String displayTable() {
             String friCheckBoxT = (schedule.fri) ? buttonLink("friUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("friChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
             String satCheckBoxT = (schedule.sat) ? buttonLink("satUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("satChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
             String pauseCheckBoxT = (schedule.pause) ? buttonLink("pauseUnChecked|$deviceAndScheduleId", "<iconify-icon icon=ic:sharp-pause-circle-filled></iconify-icon>", "red", "23px") : buttonLink("pauseChecked|$deviceAndScheduleId", "<iconify-icon icon=ic:baseline-play-circle></iconify-icon>", "green", "23px")
+            String useVariableTimeCheckBoxT = (schedule.useVariableTime) ? buttonLink("useVariableTimeUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "purple", "23px") : buttonLink("useVariableTimeChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
             String sunTimeCheckBoxT = (schedule.sunTime) ? buttonLink("sunTimeUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "purple", "23px") : buttonLink("sunTimeChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
             String sunsetCheckBoxT = (schedule.sunset) ? buttonLink("sunsetUnChecked|$deviceAndScheduleId", "<iconify-icon icon=ph:moon-stars-duotone></iconify-icon>", "DodgerBlue", "23px") : buttonLink("sunsetChecked|$deviceAndScheduleId", "<iconify-icon icon='ph:sun-duotone'></iconify-icon>", "orange", "23px")
             String offset = buttonLink("newOffset|$deviceAndScheduleId", thisOffsetTime, "MediumBlue")
@@ -472,17 +542,27 @@ String displayTable() {
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
             if (schedule.sunTime) {
-                str += "<td title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>"
+                str += "<td title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
+                        "<td>Using Sun<br>Time</td>"
+            } else if (schedule.useVariableTime){
+                str += "<td title='Select Hub Variable'>$startTime</td>" +
+                        "<td title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             } else {
-                str += "<td style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>"
+                str += "<td style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
+                        "<td title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             }
 
-            str += "<td title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
-            if (schedule.sunTime) {
-                str += "<td title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
-                        "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+            if (schedule.useVariableTime) {
+                str += "<td colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                       "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
             } else {
-                str += "<td colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                str += "<td title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
+                if (schedule.sunTime) {
+                    str += "<td title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
+                            "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                } else {
+                    str += "<td colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                }
             }
 
             str += "<td title='Check Box to select Day'>$sunCheckBoxT</td>" +
@@ -514,7 +594,7 @@ String displayTable() {
 void switchHandler(data) {
     if (logEnableBool) logDebug "switchHandler - data: $data"
 
-    // If this is set, crons should not even be schedules but we'll check anyways
+    // If this is set, crons should not even be scheduled but we'll check anyways
     if (pauseBool) {
         if (logEnableBool) logDebug "All schedules have been manually paused. Skipping."
         return
@@ -527,22 +607,36 @@ void switchHandler(data) {
     if ((modeBool && mode.contains(location.mode)) || (!modeBool)) {
         if ((switchActivationBool && activationSwitch.currentSwitch == activationSwitchOnOff) || (!switchActivationBool)) {
             if (!schedule.pause) { // If schedule is paused it should never be scheduled anyway. We'll still check.
-                logDebug "switchHandler - Device: $device; schedule: $schedule"
-                if (schedule.desiredState == "on") {
-                    if (deviceConfig.capability == "Dimmer") {
-                        if (activateOnBeforeLevelBool) {
+                // Check to make sure the date is correct if we're using Hub Variables
+                def validDate = true
+                if (schedule.useVariableTime && schedule.variableTime != null) {
+                    def dateStr = getDateFromDateTimeString(schedule.startTime)
+                    if (!dateStr.equals("9999-99-99")){ // this indicates the Hub Variable is only a time, not datetime
+                        def parsedDate = Date.parse('yyyy-MM-dd', dateStr).clearTime()
+                        validDate = new Date().clearTime() == parsedDate
+                    }
+                }
+
+                if (validDate) {
+                    logDebug "switchHandler - Device: $device; schedule: $schedule"
+                    if (schedule.desiredState == "on") {
+                        if (deviceConfig.capability == "Dimmer") {
+                            if (activateOnBeforeLevelBool) {
+                                device.on()
+                                logDebug "$device turned on"
+                            }
+                            device.setLevel(schedule.desiredLevel)
+                            logDebug "$device set to $schedule.desiredLevel"
+                        } else {
                             device.on()
                             logDebug "$device turned on"
                         }
-                        device.setLevel(schedule.desiredLevel)
-                        logDebug "$device set to $schedule.desiredLevel"
                     } else {
-                        device.on()
-                        logDebug "$device turned on"
+                        device.off()
+                        logDebug "$device turned off"
                     }
                 } else {
-                    device.off()
-                    logDebug "$device turned off"
+                    logDebug "Scheduled date is in the past, skipping run for Device: $device; schedule: $schedule"
                 }
             } else {
                 // If schedule is paused it should never be scheduled anyway
@@ -556,11 +650,11 @@ void switchHandler(data) {
     }
 }
 
-// Get new sunrise/sunset times every day
-def sunHandler(evt) {
-    logDebug "sunHandler called"
+// Get new sunrise/sunset and Hub Variable times
+def refreshVariables(evt) {
+    logDebug "refreshVariables called"
     updateSunriseAndSet()
-    updated()  // Rebuild cron with new sunrise/set schedules
+    updateVariableTimes()
 }
 
 def logsOff() {
@@ -598,6 +692,9 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("setCapabilitySwitch|")) state.setCapabilitySwitch = btn.minus("setCapabilitySwitch|")
     else if (btn.startsWith("desiredState|")) state.desiredState = btn.minus("desiredState|")
     else if (btn.startsWith("desiredLevel|")) state.desiredLevel = btn.minus("desiredLevel|")
+    else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
+    else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
+    else if (btn.startsWith("selectVariableStartTime|")) state.selectVariableStartTime = btn.minus("selectVariableStartTime|")
 }
 
 
@@ -618,13 +715,39 @@ def updateSunriseAndSet() {
     }
 }
 
+def variableChangeHandler(evt) {
+    logDebug "Hub Variable Changed: ${evt.name} -> ${evt.value}"
+    updated()
+}
+
+def updateVariableTimes() {
+    devices.each { dev ->
+        state.devices["$dev.id"].schedules.each { scheduleId, schedule ->
+            if (schedule.useVariableTime && schedule.variableTime) {
+                def varTime = getGlobalVar(schedule.variableTime)
+                if (varTime != null) {
+                    // If the Hub Variable just a date, then the time will be 99:99:99.999. Replace that with midnight.
+                    def startTime = varTime.value.replace("99:99:99.999", "00:00:00.000")
+                    if (schedule.offset && schedule.offset != 0) {
+                        def date = new Date().parse("yyyy-MM-dd'T'HH:mm:ss.sssXX", startTime)
+                        date = new Date(date.getTime() + (schedule.offset * 60 * 1000L)) // convert from minutes to seconds to milliseconds
+                        startTime = date.format("yyyy-MM-dd'T'HH:mm:ss.sssXX")
+                    }
+                    schedule.startTime = startTime
+                    schedule.startTime = startTime
+                }
+            }
+        }
+    }
+}
+
 def buildCron() {
     logDebug "buildCron called"
 
     state.devices.each { deviceId, deviceConfigs ->
         deviceConfigs.schedules.each { scheduleId, schedule ->
             if (schedule.startTime) {
-                String formattedTime = schedule.startTime.substring(11, schedule.startTime.length() - 12)
+                String formattedTime = getTimeFromDateTimeString(schedule.startTime)
                 String hours = formattedTime.substring(0, formattedTime.length() - 3) // Chop off the last 3 in string
                 String minutes = formattedTime.substring(3) // Chop off the first 3 in string
 
@@ -646,6 +769,33 @@ def buildCron() {
             }
         }
     }
+}
+
+private getHubVariableList() {
+    def variables = [:]
+
+    // Create a map of variable names to their name & value concatenation
+    def allVariables = getGlobalVarsByType("datetime")
+    allVariables.each { key, value ->
+        variables[key] = "$key: ${value.value}"
+    }
+    return variables
+}
+
+private getValueForHubVariable(name) {
+    def val = getGlobalVar(name)
+    if (val != null) {
+        return val.value
+    }
+    return null
+}
+
+private getTimeFromDateTimeString(dt) {
+    return dt.substring(11, dt.length() - 12)
+}
+
+private getDateFromDateTimeString(dt) {
+    return dt.tokenize("T")[0]
 }
 
 // Formating function for consistency and ease of changing style
@@ -682,7 +832,9 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             days     : "",
             pause    : false,
             desiredState: "on",
-            desiredLevel: 100
+            desiredLevel: 100,
+            useVariableTime: false,
+            variableTime: null
     ]
 }
 
@@ -715,24 +867,53 @@ void logError(msg) {
 void initialize() {
     logDebug "initialize() called"
 
+    if (logEnableBool) runIn(3600, logsOff)  // Disable all Logging after time elapsed
+
     if (pauseBool) {
         logDebug "All schedules have been manually paused. Will skip scheduling"
         return
     }
 
-    schedule("0 0 1 ? * * *", sunHandler)   // Every day at 1am to get new sunrise/sunset times
+    schedule("0 0 1 ? * * *", updated) // Every day at 1am update schedules (refreshes sun rise/set and Hub Variables)
 
     logDebug state.devices
 
     // Set device cron schedules
-    devices.sort { it.displayName.toLowerCase() }.each { dev ->
-        deviceConfig = state.devices["$dev.id"]
-        if (deviceConfig != null) { // Can happen when adding a new device that doesn't yet have a default config
-            zone = deviceConfig.zone
-            deviceConfig.schedules.each { scheduleId, sched ->
-                if (sched.cron && !sched.pause && !sched.cron.contains("Sel")) {
-                    schedule(sched.cron, switchHandler, [data:[deviceId: dev.id, scheduleId: scheduleId], overwrite:false])
-                    logDebug "SCHEDULED Device: $dev; DeviceId: $dev.id; ScheduleId: $scheduleId; deviceSchedule: $sched"
+    if (devices != null) {
+        devices.sort { it.displayName.toLowerCase() }.each { dev ->
+            deviceConfig = state.devices["$dev.id"]
+            if (deviceConfig != null) { // Can happen when adding a new device that doesn't yet have a default config
+                zone = deviceConfig.zone
+                deviceConfig.schedules.each { scheduleId, sched ->
+                    if (sched.cron && !sched.pause && !sched.cron.contains("Sel")) {
+                        schedule(sched.cron, switchHandler, [data:[deviceId: dev.id, scheduleId: scheduleId], overwrite:false])
+                        logDebug "SCHEDULED Device: $dev; DeviceId: $dev.id; ScheduleId: $scheduleId; deviceSchedule: $sched"
+
+                        // Subscribe to Hub Variable Change Events & Register Variable Use with Hub
+                        if (sched.useVariableTime && sched.variableTime != null) {
+                            addInUseGlobalVar(sched.variableTime)
+                            subscribe(location, "variable:${sched.variableTime}", "variableChangeHandler")
+                            logDebug "Subscribed to Hub Variable Change events for variable: ${sched.variableTime}"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Required handler for when a hub variable is renamed
+def renameVariable(oldName, newName) {
+    logDebug "renameVariable called - old: $oldName, new: $newName"
+    if (devices != null) {
+        devices.each { dev ->
+            deviceConfig = state.devices["$dev.id"]
+            if (deviceConfig != null) { // Can happen when adding a new device that doesn't yet have a default config
+                zone = deviceConfig.zone
+                deviceConfig.schedules.each { scheduleId, sched ->
+                    if (sched != null && sched.variableTime != null && sched.variableTime.equals(oldName)) {
+                        sched.variableTime = newName
+                    }
                 }
             }
         }
@@ -742,11 +923,11 @@ void initialize() {
 def updated() {  // runs every 'Done' on already installed app
     logDebug "updated called"
     unsubscribe()
-    unschedule(switchHandler)  // cancels all(or one) scheduled jobs including runIn
-    unschedule(sunHandler)  // sunrise/set check
+    unschedule()  // cancels all (or one) scheduled jobs including runIn, switchHandler, refreshVariables
+    removeAllInUseGlobalVar()  // remove all in use global Hub Variables
+    refreshVariables()
     buildCron()  // build schedules
     initialize()  // set schedules and subscribes
-    if (logEnableBool) runIn(3600, logsOff)  // Disable all Logging after time elapsed
 }
 
 def installed() {  // only runs once for new app 'Done' or first time open
