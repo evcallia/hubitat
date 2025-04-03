@@ -61,12 +61,13 @@
  *                       - Registers the use of a Hub Variable with the Hub
  *                       - Update schedules when the Hub Variable changes
  *                     - Fix null pointer that happened occasionally when a new device was added
+ *  2.0.1 - 2025-04-03 - Fix app version not showing properly
  *
  */
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "1.0.0"
+    state.version = "2.0.1"
 }
 
 definition(
