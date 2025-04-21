@@ -62,7 +62,7 @@
  *                       - Update schedules when the Hub Variable changes
  *                     - Fix null pointer that happened occasionally when a new device was added
  *  2.0.1 - 2025-04-03 - Fix app version not showing properly
- *  2.0.1 - 2025-04-21 - Fix error when offset is applied to "time" or "date" only Hub Variables
+ *  2.0.2 - 2025-04-21 - Fix error when offset is applied to "time" or "date" only Hub Variables
  *
  */
 
