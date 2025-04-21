@@ -62,6 +62,7 @@
  *                       - Update schedules when the Hub Variable changes
  *                     - Fix null pointer that happened occasionally when a new device was added
  *  2.0.1 - 2025-04-03 - Fix app version not showing properly
+ *  2.0.1 - 2025-04-21 - Fix error when offset is applied to "time" or "date" only Hub Variables
  *
  */
 
@@ -462,6 +463,10 @@ String displayTable() {
         def sortedSchedules = state.devices["$dev.id"].schedules.sort { a, b ->
             try {
                 def parseDateTime = { dateStr ->
+                    if (dateStr == "00000000000Select000000000000") {
+                        return null
+                    }
+
                     try {
                         // Try ISO format first
                         return new Date().parse("yyyy-MM-dd'T'HH:mm:ss.SSSZ", dateStr)
@@ -727,14 +732,20 @@ def updateVariableTimes() {
             if (schedule.useVariableTime && schedule.variableTime) {
                 def varTime = getGlobalVar(schedule.variableTime)
                 if (varTime != null) {
-                    // If the Hub Variable just a date, then the time will be 99:99:99.999. Replace that with midnight.
-                    def startTime = varTime.value.replace("99:99:99.999", "00:00:00.000")
+                    // If the Hub Variable is just a date, then the time will be 99:99:99.999-9999. Replace that with midnight of current timezone.
+                    def startTime = varTime.value.replace("99:99:99.999-9999", "00:00:00.000" + new Date().format("XX"))
                     if (schedule.offset && schedule.offset != 0) {
+                        dateStr = getDateFromDateTimeString(startTime)
                         def date = new Date().parse("yyyy-MM-dd'T'HH:mm:ss.sssXX", startTime)
                         date = new Date(date.getTime() + (schedule.offset * 60 * 1000L)) // convert from minutes to seconds to milliseconds
-                        startTime = date.format("yyyy-MM-dd'T'HH:mm:ss.sssXX")
+
+                        if (dateStr.equals("9999-99-99")) {
+                            // When adding offsets for time only vars, it messes up the default 9999-99-99 format so we need to reformat it that way
+                            startTime = date.format("'9999-99-99T'HH:mm:ss.sssXX")
+                        } else {
+                            startTime = date.format("yyyy-MM-dd'T'HH:mm:ss.sssXX")
+                        }
                     }
-                    schedule.startTime = startTime
                     schedule.startTime = startTime
                 }
             }
