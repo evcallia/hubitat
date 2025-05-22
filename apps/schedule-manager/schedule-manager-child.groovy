@@ -74,11 +74,11 @@ def titleVersion() {
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia",
+        namespace: "evcallia-dev",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia:Schedule Manager",
+        parent: "evcallia-dev:Schedule Manager",
         iconUrl: "",
         iconX2Url: ""
 )
@@ -408,13 +408,57 @@ String displayTable() {
 
     // Table Header Build
     String str = "<script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>"
-    str += "<style>.mdl-data-table tbody tr:hover{background-color:inherit} .tstat-col td, .tstat-col th {font-size:15px !important; padding:2px 4px;text-align:center} + .tstat-col td {font-size:13px  }" +
-            "</style><div style='overflow-x:auto'><table class='mdl-data-table tstat-col' style=';border:3px solid black'>" +
-            "<thead><tr style='border-bottom:2px solid black'><th>#</th>" +
+    str += """<style>
+            .mdl-data-table {
+                width: 100%;
+                border-collapse: collapse;
+                border: 1px solid #E0E0E0;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                border-radius: 4px;
+                overflow: hidden;
+                margin-bottom: 20px;
+            }
+            .mdl-data-table thead {
+                background-color: #F5F5F5;
+            }
+            .mdl-data-table th {
+                font-size: 14px !important;
+                font-weight: 500;
+                color: #424242;
+                padding: 8px !important;
+                text-align: center;
+                border-bottom: 2px solid #E0E0E0;
+                border-right: 1px solid #E0E0E0;
+            }
+            .mdl-data-table td {
+                font-size: 14px !important;
+                padding: 6px 4px !important;
+                text-align: center;
+                border-bottom: 1px solid #EEEEEE;
+                border-right: 1px solid #EEEEEE;
+            }
+            .mdl-data-table tbody tr:hover {
+                background-color: inherit !important;
+            }
+            .device-section {
+                // background-color: #F9F9F9;
+                font-weight: 500;
+            }
+            .device-link a {
+                color: #2196F3;
+                text-decoration: none;
+                font-weight: 500;
+            }
+            .device-link a:hover {
+                text-decoration: underline;
+            }
+            </style>
+            <div style='overflow-x:auto'><table class='mdl-data-table'>""" +
+            "<thead><tr><th>#</th>" +
             "<th>Device</th>" +
             "<th>Current<br>State</th>" +
             "<th>Type</th>" +
-            "<th style='border-right:2px solid black'>Add<br>Run</th>" +
+            "<th style='border-right:1px solid gray'>Add<br>Run</th>" +
             "<th style='width: 60px !important'>Run<br>Time</th>" +
             "<th>Use Hub<br>Variable?</th>" +
             "<th>Use Sun<br>Set/Rise?</th>" +
@@ -423,8 +467,8 @@ String displayTable() {
             "<th>Sun</th>" + "<th>Mon</th>" + "<th>Tue</th>" + "<th>Wed</th>" + "<th>Thu</th>" + "<th>Fri</th>" + "<th>Sat</th>" +
             "<th>Pause<br>Schedule</th>" +
             "<th>Desired<br>State</th>" +
-            "<th style='border-right:2px solid black'>Desired<br>Level</th>" +
-            "<th style='border-right:2px solid black'>Remove<br>Run</th>" +
+            "<th style='border-right:1px solid gray'>Desired<br>Level</th>" +
+            "<th>Remove<br>Run</th>" +
             "</tr></thead>"
 
     int zone = 0
@@ -433,29 +477,29 @@ String displayTable() {
 
         //**** Setup 'Device' Section of Table ****//
 
-        String deviceLink = "<a href='/device/edit/$dev.id' target='_blank' title='Open Device Page for $dev'>$dev"
-        String addNewRunButton = buttonLink("addNew|$dev.id", "+", "green", "23px")
+        String deviceLink = "<a href='/device/edit/$dev.id' target='_blank' title='Open Device Page for $dev'>$dev</a>"
+        String addNewRunButton = buttonLink("addNew|$dev.id", "<iconify-icon icon='material-symbols:add-circle-outline-rounded'></iconify-icon>", "#4CAF50", "24px")
         int thisZone = state.devices["$dev.id"].zone = zone
         int scheduleCount = state.devices["$dev.id"].schedules.size()
         boolean deviceIsDimmer = dev.capabilities.find { it.name == "SwitchLevel" } != null
 
-        str += "<trstyle='color:black'><td rowspan='$scheduleCount'>$thisZone</td>" +
-                "<td rowspan='$scheduleCount'>$deviceLink</td>"
+        str += "<tr class='device-section'><td rowspan='$scheduleCount'>$thisZone</td>" +
+                "<td rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
 
         if (dev.currentSwitch) {
-            str += "<td rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "green" : "red"};font-weight:bold;font-size:23px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
+            str += "<td rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "#4CAF50" : "#F44336"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
         } else if (dev.currentValve) {
-            str += "<td rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "green" : "red"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+            str += "<td rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "#4CAF50" : "#F44336"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         }
 
         if (deviceIsDimmer) {
-            String typeButton = (state.devices["$dev.id"].capability == "Switch") ? buttonLink("setCapabilityDimmer|$dev.id", "Switch", "MediumBlue") : buttonLink("setCapabilitySwitch|$dev.id", "Dimmer", "MediumBlue")
+            String typeButton = (state.devices["$dev.id"].capability == "Switch") ? buttonLink("setCapabilityDimmer|$dev.id", "Switch", "#2196F3") : buttonLink("setCapabilitySwitch|$dev.id", "Dimmer", "#2196F3")
             str += "<td rowspan='$scheduleCount' style='font-weight:bold' title='Capability: Dimmer'>$typeButton</td>"
         } else {
             str += "<td rowspan='$scheduleCount' title='Capability: Switch'>Switch</td>"
         }
 
-        str += "<td rowspan='$scheduleCount' style='border-right:2px solid black' title='Click to add new time for this device'>$addNewRunButton</td>"
+        str += "<td rowspan='$scheduleCount' style='border-right:1px solid gray' title='Click to add new time for this device'>$addNewRunButton</td>"
 
         //**** Update sunrise/set times and order schedules ****//
         updateSunriseAndSet()
@@ -582,9 +626,9 @@ String displayTable() {
                     "<td title='Click to change desired state'>$desiredStateButton</td>"
 
             if (state.devices["$dev.id"].capability == "Switch" || schedule.desiredState == "off") {
-                str += "<td style='border-right:2px solid black'></td>"
+                str += "<td style='border-right:1px solid gray'></td>"
             } else {
-                str += "<td style='border-right:2px solid black; font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
+                str += "<td style='border-right:1px solid gray; font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
             }
 
             str += "<td title='Click to remove run'>$removeRunButton</td></tr>"
@@ -812,18 +856,18 @@ private getDateFromDateTimeString(dt) {
 
 // Formating function for consistency and ease of changing style
 def getFormat(type, myText = "") {
-    if (type == "title") return "<h3 style='color:SteelBlue; font-weight: bold'>${myText}</h3>"  // Steel-Blue
-    if (type == "blueRegular") return "<div style='color:SteelBlue; font-weight: bold'>${myText}</div>"  // Steel-Blue
-    if (type == "noticable") return "<div style='color:#CC5500'>${myText}</div>"  // Burnt-Orange
-    if (type == "important") return "<div style='color:#32a4be'>${myText}</div>"  // Flat Tourquise
-    if (type == "lessImportant") return "<div style='color:green'>${myText}</div>" // Green
-    if (type == "header") return "<div style='color:#000000;font-weight: bold'>${myText}</div>"  // Black
-    if (type == "important2") return "<div style='color:#000000'>${myText}</div>"   // Black
+    if (type == "title") return "<h3 style='color:#2196F3; font-weight: bold; margin-bottom: 15px;'>${myText}</h3>"
+    if (type == "blueRegular") return "<div style='color:#2196F3; font-weight: bold; font-size: 16px; padding: 5px 0;'>${myText}</div>"
+    if (type == "noticable") return "<div style='color:#FF5722; font-weight: 500; padding: 3px 0;'>${myText}</div>"
+    if (type == "important") return "<div style='color:#00BCD4; font-weight: 500; padding: 3px 0;'>${myText}</div>"
+    if (type == "lessImportant") return "<div style='color:#4CAF50; font-weight: normal; padding: 3px 0;'>${myText}</div>"
+    if (type == "header") return "<div style='color:#212121; font-weight: bold; font-size: 16px; margin-top: 15px; margin-bottom: 5px;'>${myText}</div>"
+    if (type == "important2") return "<div style='color:#424242; font-weight: normal;'>${myText}</div>"
 }
 
 // Helper to generate & format a button
-String buttonLink(String btnName, String linkText, color = SteelBlue, font = "15px") {
-    "<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"
+String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15px") {
+    "<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"
 }
 
 // Generate a new, empty schedule
@@ -946,3 +990,6 @@ def installed() {  // only runs once for new app 'Done' or first time open
     logDebug "installed called"
     updated()
 }
+
+
+
