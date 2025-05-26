@@ -66,6 +66,11 @@
  *
  */
 
+import groovy.json.JsonOutput
+import java.time.format.DateTimeFormatter
+import java.time.LocalDate
+import java.time.ZonedDateTime
+
 def titleVersion() {
     state.name = "Schedule Manager"
     state.version = "2.0.1"
@@ -80,7 +85,8 @@ definition(
         category: "Control",
         parent: "evcallia-dev:Schedule Manager",
         iconUrl: "",
-        iconX2Url: ""
+        iconX2Url: "",
+        oauth: true
 )
 preferences { page(name: "mainPage") }
 
@@ -143,56 +149,6 @@ def mainPage() {
                 }
 
                 paragraph displayTable()
-
-
-                //**** Create hidden inputs used to modify values in the table ****//
-
-                // Input Start Time
-                if (state.newStartTime) {
-                    input name: "newStartTime", type: "time", title: getFormat("noticable", "<b>Enter Start/On Time, Applies to all checked days for Switch.<br><small>Uses 24hr time, &nbsp Hit Update</small>"), required: false, submitOnChange: true, width: 5, newLineAfter: true, style: 'margin-left:10px'
-                    if (newStartTime) {
-                        def (deviceId, scheduleId) = state.newStartTime.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].startTime = newStartTime
-                        state.remove("newStartTime")
-                        app.removeSetting("newStartTime")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
-
-                // Sunrise/Sunset or variable offset time
-                if (state.newOffsetTime) {
-                    input name: "newOffsetTime", type: "number", title: getFormat("noticable", "<b>Enter +/- Offset time from Sunrise or Sunset in minutes. Applies to all checked days for Switch.<br><small>EX: 30, -30, or -90, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "-1000 to 1000", range: "-1000..1000", width: 8, newLineAfter: true, style: 'margin-left:10px'
-                    if (newOffsetTime) {
-                        def (deviceId, scheduleId) = state.newOffsetTime.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].offset = newOffsetTime
-                        state.remove("newOffsetTime")
-                        app.removeSetting("newOffsetTime")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
-
-                // Desired Level
-                if (state.desiredLevel) {
-                    input name: "desiredLevel", type: "number", title: getFormat("noticable", "<b>Enter a number between 1-100 for the desired dimmer level. Applies to all checked days for Dimmer.</b><br><small>EX: 1, 50, or 100, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "0 to 100", range: "0..100", width: 8, newLineAfter: true, style: 'margin-left:10px'
-                    if (desiredLevel) {
-                        def (deviceId, scheduleId) = state.desiredLevel.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].desiredLevel = desiredLevel
-                        state.remove("desiredLevel")
-                        app.removeSetting("desiredLevel")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
-
-                if (state.selectVariableStartTime) {
-                    input name: "newVariableTime", type: "enum", title: getFormat("noticable", "<b>Select Hub Variable</b>"), options: getHubVariableList(), required: false, submitOnChange: true, width: 8, newLineAfter: true, style: 'margin-left:10px'
-                    if (newVariableTime) {
-                        def (deviceId, scheduleId) = state.selectVariableStartTime.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].variableTime = newVariableTime
-                        state.remove("selectVariableStartTime")
-                        app.removeSetting("newVariableTime")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
             }
         }
 
@@ -231,6 +187,85 @@ def mainPage() {
                     "</ul>")
         }
     }
+}
+
+//****  API Routes ****//
+mappings {
+    path("/updateTime") {
+        action: [POST: "updateTime"]
+    }
+
+    path("/updateOffset") {
+        action: [POST: "updateOffset"]
+    }
+
+    path("/updateDesiredLevel") {
+        action: [POST: "updateDesiredLevel"]
+    }
+
+    path("/updateHubVariable") {
+        action: [POST: "updateHubVariable"]
+    }
+
+    path("/getHubVariableOptions") {
+        action: [GET: "getHubVariableOptions"]
+    }
+}
+
+//****  API Route Handlers ****//
+def updateTime() {
+    logDebug "updateTime called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newStartTime = json.startTime
+    def zdt = ZonedDateTime.now().withHour(newStartTime.split(':')[0].toInteger())
+                                .withMinute(newStartTime.split(':')[1].toInteger())
+                                .withSecond(0)
+                                .withNano(0)
+    def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    state.devices[deviceId].schedules[scheduleId].startTime = zdt.format(formatter)
+}
+
+def updateOffset() {
+    logDebug "updateOffset called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newOffset = json.offset.toInteger()
+    state.devices[deviceId].schedules[scheduleId].offset = newOffset
+    refreshVariables()
+    if (state.devices[deviceId].schedules[scheduleId].useVariableTime) {
+        render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(state.devices[deviceId].schedules[scheduleId].variableTime, state.devices[deviceId].schedules[scheduleId].startTime), offset: newOffset, varType: "hubVariable"])
+    } else {
+        def newStartTime = getTimeFromDateTimeString(state.devices[deviceId].schedules[scheduleId].startTime)
+        render contentType: "application/json", data: JsonOutput.toJson([startTime: newStartTime, offset: newOffset, varType: "sun"])
+    }
+}
+
+def updateDesiredLevel() {
+    logDebug "updateDesiredLevel called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newLevel = json.level.toInteger()
+    state.devices[deviceId].schedules[scheduleId].desiredLevel = newLevel
+}
+
+def updateHubVariable() {
+    logDebug "updateHubVariable called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newVariable = json.hubVariable
+    state.devices[deviceId].schedules[scheduleId].variableTime = newVariable
+    updateVariableTimes()
+    render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(newVariable, state.devices[deviceId].schedules[scheduleId].startTime)])
+}
+
+def getHubVariableOptions() {
+    logDebug "getHubVariableOptions called"
+    render contentType: "application/json", data: JsonOutput.toJson(getHubVariableList())
 }
 
 
@@ -342,10 +377,6 @@ String displayTable() {
     // Variable time
     if (state.useVariableTimeChecked) {
         def (deviceId, scheduleId) = state.useVariableTimeChecked.tokenize('|')
-        logDebug "deviceId $deviceId; scheduleId: $scheduleId"
-        logDebug "state.devices[deviceId]: ${state.devices[deviceId]}"
-        logDebug "state.devices[deviceId].schedules: ${state.devices[deviceId].schedules}"
-        logDebug "state.devices[deviceId].schedules[scheduleId]: ${state.devices[deviceId].schedules[scheduleId]}"
         state.devices[deviceId].schedules[scheduleId].useVariableTime = true
         state.remove("useVariableTimeChecked")
     } else if (state.useVariableTimeUnChecked) {
@@ -406,7 +437,7 @@ String displayTable() {
         state.remove("desiredState")
     }
 
-    // Table Header Build
+    // Configure table, scripts and css
     String str = "<script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>"
     str += """<style>
             .mdl-data-table {
@@ -441,7 +472,6 @@ String displayTable() {
                 background-color: inherit !important;
             }
             .device-section {
-                // background-color: #F9F9F9;
                 font-weight: 500;
             }
             .device-link a {
@@ -452,7 +482,332 @@ String displayTable() {
             .device-link a:hover {
                 text-decoration: underline;
             }
+
+            /* Popup styles */
+            .popup-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.5);
+                display: none;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+            .popup-container {
+                background-color: #FFFFFF;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                padding: 20px;
+                max-width: 400px;
+                width: 90%;
+                position: relative;
+            }
+            .popup-title {
+                font-size: 18px;
+                font-weight: 500;
+                color: #212121;
+                margin-bottom: 15px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #EEEEEE;
+            }
+            .popup-content {
+                margin-bottom: 20px;
+            }
+            .popup-buttons {
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+            }
+            .popup-btn {
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: 500;
+                cursor: pointer;
+                border: none;
+                outline: none;
+            }
+            .popup-btn-primary {
+                background-color: #2196F3;
+                color: white;
+            }
+            .popup-btn-secondary {
+                background-color: #E0E0E0;
+                color: #424242;
+            }
+            .popup-close {
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                font-size: 20px;
+                cursor: pointer;
+                color: #9E9E9E;
+            }
+            .popup-input {
+                width: 100%;
+                padding: 10px;
+                border-radius: 4px;
+                border: 1px solid #E0E0E0;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            .popup-label {
+                display: block;
+                font-size: 14px;
+                color: #616161;
+                margin-bottom: 5px;
+            }
             </style>
+
+            <script>
+            // Popup system
+            function showPopup(title, content, submitCallback) {
+                // Create popup elements
+                const overlay = document.createElement('div');
+                overlay.className = 'popup-overlay';
+
+                const container = document.createElement('div');
+                container.className = 'popup-container';
+
+                const closeBtn = document.createElement('div');
+                closeBtn.className = 'popup-close';
+                closeBtn.innerHTML = '&times;';
+                closeBtn.onclick = hidePopup;
+
+                const titleEl = document.createElement('div');
+                titleEl.className = 'popup-title';
+                titleEl.innerText = title;
+
+                const contentEl = document.createElement('div');
+                contentEl.className = 'popup-content';
+                contentEl.innerHTML = content;
+
+                const buttonsEl = document.createElement('div');
+                buttonsEl.className = 'popup-buttons';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'popup-btn popup-btn-secondary';
+                cancelBtn.innerText = 'Cancel';
+                cancelBtn.onclick = hidePopup;
+
+                const submitBtn = document.createElement('button');
+                submitBtn.className = 'popup-btn popup-btn-primary';
+                submitBtn.innerText = 'Submit';
+                submitBtn.onclick = function() {
+                    submitCallback(overlay);
+                };
+
+                // Build popup structure
+                buttonsEl.appendChild(cancelBtn);
+                buttonsEl.appendChild(submitBtn);
+
+                container.appendChild(closeBtn);
+                container.appendChild(titleEl);
+                container.appendChild(contentEl);
+                container.appendChild(buttonsEl);
+
+                overlay.appendChild(container);
+
+                // Add to document and show
+                document.body.appendChild(overlay);
+                setTimeout(() => {
+                    overlay.style.display = 'flex';
+                    // Focus the first input if exists
+                    const firstInput = overlay.querySelector('input, select');
+                    if (firstInput) firstInput.focus();
+                }, 10);
+
+                return overlay;
+            }
+
+            function hidePopup() {
+                const overlays = document.querySelectorAll('.popup-overlay');
+                overlays.forEach(overlay => {
+                    overlay.style.display = 'none';
+                    setTimeout(() => {
+                        overlay.remove();
+                    }, 300);
+                });
+            }
+
+            // Time input popup
+            function editStartTimePopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter Desired Time</label>
+                    <input type="time" class="popup-input" id="timeInput" value="${currentValue || ''}">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Applies to all checked days for this device.</p>
+                `;
+
+                showPopup("Set Schedule Time", content, (popup) => {
+                    const input = popup.querySelector('#timeInput');
+                    if (input.value) {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateTime?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            startTime: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId).innerHTML = timeInput.value;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Offset input popup
+            function newOffsetPopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter +/- Offset time (in minutes)</label>
+                    <input type="number" class="popup-input" id="offsetInput" value="${currentValue || '0'}">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Examples: 30, -30, or -90. Applied to Sunrise/Sunset or Hub Variable time.</p>
+                `;
+
+                showPopup("Set Time Offset", content, (popup) => {
+                    const input = popup.querySelector('#offsetInput');
+                    if (input.value !== '') {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateOffset?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            offset: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                const jsonResponse = JSON.parse(xhr.responseText);
+                                const newStartTime = jsonResponse.startTime;
+                                const varType = jsonResponse.varType;
+
+                                var idPrefix = ""
+                                if (varType === "hubVariable") {
+                                    idPrefix = "selectVariableStartTime|";
+                                } else {
+                                    idPrefix = "editStartTime|";
+                                }
+
+                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId).innerHTML = input.value;
+                                document.getElementById(idPrefix + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Dimmer level popup
+            function desiredLevelPopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter Dimmer Level (1-100)</label>
+                    <input type="number" class="popup-input" id="levelInput" value="${currentValue || '100'}" min="0" max="100">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Set the desired brightness level when the device turns on.</p>
+                `;
+
+                showPopup("Set Dimmer Level", content, (popup) => {
+                    const input = popup.querySelector('#levelInput');
+                    if (input.value !== '' && input.value >= 0 && input.value <= 100) {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateDesiredLevel?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            level: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                document.getElementById("desiredLevel|" + deviceId + "|" + scheduleId).innerHTML = input.value;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Hub Variable popup
+            function selectVariableStartTimePopup(deviceId, scheduleId, currentValue) {
+                const fetchOptions = () => {
+                    return fetch('/apps/api/${app.id}/getHubVariableOptions?access_token=${state.accessToken}')
+                        .then(response => response.json())
+                        .catch(error => {
+                            console.error('Error fetching variable options:', error);
+                            return {};
+                        });
+                };
+
+                fetchOptions().then(options => {
+                    console.log("fetched options: " + options)
+                    // Create a select dropdown from the options
+                    let optionsHtml = '<label class="popup-label">Select Hub Variable</label>';
+                    optionsHtml += '<select class="popup-input" id="variableSelect">';
+
+                    // Add options from the server
+                    for (const [key, value] of Object.entries(options)) {
+                        const selected = currentValue === key ? 'selected' : '';
+                        optionsHtml += '<option value="' + key + '" ' + selected + '>' + value + '</option>';
+                    }
+
+                    optionsHtml += '</select>';
+                    optionsHtml += '<p style="font-size:12px;color:#757575;margin-top:5px;">Select a Hub Variable to use as the schedule time.</p>';
+
+                    showPopup("Select Hub Variable", optionsHtml, (popup) => {
+                        const input = popup.querySelector('#variableSelect');
+                        if (input.value) {
+                            // Send request to hubitat app api to handle state change
+                            var xhr = new XMLHttpRequest();
+                            xhr.open('POST', '/apps/api/${app.id}/updateHubVariable?access_token=${state.accessToken}', true);
+                            xhr.setRequestHeader('Content-Type', 'application/json');
+
+                            var data = JSON.stringify({
+                                deviceId: deviceId,
+                                scheduleId: scheduleId,
+                                hubVariable: input.value
+                            });
+
+                            xhr.onreadystatechange = function() {
+                                if (xhr.readyState === 4 && xhr.status === 200) {
+                                    // When successful, update the input field in the table so we don't need to page refresh
+                                    const jsonResponse = JSON.parse(xhr.responseText);
+                                    const newStartTime = jsonResponse.startTime;
+
+                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                                }
+                            };
+
+                            xhr.send(data);
+                        }
+                        hidePopup();
+                    });
+                });
+            }
+            </script>
+
             <div style='overflow-x:auto'><table class='mdl-data-table'>""" +
             "<thead><tr><th>#</th>" +
             "<th>Device</th>" +
@@ -501,9 +856,10 @@ String displayTable() {
 
         str += "<td rowspan='$scheduleCount' style='border-right:1px solid gray' title='Click to add new time for this device'>$addNewRunButton</td>"
 
-        //**** Update sunrise/set times and order schedules ****//
-        updateSunriseAndSet()
+        //**** Update sunrise/set & hub variable times ****//
+        refreshVariables()
 
+        // order schedules so table is sorted by time
         def sortedSchedules = state.devices["$dev.id"].schedules.sort { a, b ->
             try {
                 def parseDateTime = { dateStr ->
@@ -513,13 +869,15 @@ String displayTable() {
 
                     try {
                         // Try ISO format first
+                        def todayDateString = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+                        dateStr = dateStr.replace("yyyy-mm-dd", todayDateString).replace("9999-99-99", todayDateString).replace("sss-zzzz", "000-0000")
                         return new Date().parse("yyyy-MM-dd'T'HH:mm:ss.SSSZ", dateStr)
                     } catch (Exception e1) {
                         try {
                             // Try the other format
                             return new Date().parse("EEE MMM dd HH:mm:ss zzz yyyy", dateStr)
                         } catch (Exception e2) {
-                            logError "Failed to parse date: ${dateStr}"
+                            logError "Failed to parse date: ${dateStr}. Exception 1: ${e1.message}, Exception 2: ${e2.message}"
                             return null
                         }
                     }
@@ -552,21 +910,9 @@ String displayTable() {
                 if (schedule.variableTime) {
                     def variableValue = getValueForHubVariable(schedule.variableTime)
                     if (variableValue == null) {
-                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select<br>Variable", "MediumBlue")
+                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select Variable", "MediumBlue")
                     } else {
-                        def dtString = ""
-                        def date = getDateFromDateTimeString(schedule.startTime)
-                        if (!date.equals("9999-99-99")) {
-                            dtString += "$date"
-                        }
-                        def time = getTimeFromDateTimeString(schedule.startTime)
-                        if (!time.equals("99:99")) {
-                            if (dtString.length() > 0) {
-                                dtString += "<br>"
-                            }
-                            dtString += time
-                        }
-                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "${schedule.variableTime}<br>($dtString)", "MediumBlue")
+                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", formatHubVariableNameWithTime(schedule.variableTime, schedule.startTime), "MediumBlue")
                     }
                 } else {
                     startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select<br>Variable", "MediumBlue")
@@ -592,7 +938,7 @@ String displayTable() {
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
             if (schedule.sunTime) {
-                str += "<td title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
+                str += "<td id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
                         "<td>Using Sun<br>Time</td>"
             } else if (schedule.useVariableTime){
                 str += "<td title='Select Hub Variable'>$startTime</td>" +
@@ -735,16 +1081,13 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("sunTimeChecked|")) state.sunTimeCheckedBox = btn.minus("sunTimeChecked|")
     else if (btn.startsWith("sunsetUnChecked|")) state.sunsetUnCheckedBox = btn.minus("sunsetUnChecked|")
     else if (btn.startsWith("sunsetChecked|")) state.sunsetCheckedBox = btn.minus("sunsetChecked|")
-    else if (btn.startsWith("newOffset|")) state.newOffsetTime = btn.minus("newOffset|")
     else if (btn.startsWith("addNew|")) state.addRunTime = btn.minus("addNew|")
     else if (btn.startsWith("removeRunTime|")) state.removeRunTime = btn.minus("removeRunTime|")
     else if (btn.startsWith("setCapabilityDimmer|")) state.setCapabilityDimmer = btn.minus("setCapabilityDimmer|")
     else if (btn.startsWith("setCapabilitySwitch|")) state.setCapabilitySwitch = btn.minus("setCapabilitySwitch|")
     else if (btn.startsWith("desiredState|")) state.desiredState = btn.minus("desiredState|")
-    else if (btn.startsWith("desiredLevel|")) state.desiredLevel = btn.minus("desiredLevel|")
     else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
     else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
-    else if (btn.startsWith("selectVariableStartTime|")) state.selectVariableStartTime = btn.minus("selectVariableStartTime|")
 }
 
 
@@ -754,6 +1097,7 @@ def updateSunriseAndSet() {
     devices.each { dev ->
         state.devices["$dev.id"].schedules.each { scheduleId, schedule ->
             if (schedule.sunTime) {
+                logDebug "Updating Sunrise/Sunset for Device: $dev; Schedule: $scheduleId, Offset: ${schedule.offset}"
                 def offsetRiseAndSet = getSunriseAndSunset(sunriseOffset: schedule.offset, sunsetOffset: schedule.offset)
                 if (schedule.sunset) {
                     schedule.startTime = offsetRiseAndSet.sunset.toString()
@@ -780,14 +1124,17 @@ def updateVariableTimes() {
                     def startTime = varTime.value.replace("99:99:99.999-9999", "00:00:00.000" + new Date().format("XX"))
                     if (schedule.offset && schedule.offset != 0) {
                         dateStr = getDateFromDateTimeString(startTime)
-                        def date = new Date().parse("yyyy-MM-dd'T'HH:mm:ss.sssXX", startTime)
-                        date = new Date(date.getTime() + (schedule.offset * 60 * 1000L)) // convert from minutes to seconds to milliseconds
+                        def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+                        def date = ZonedDateTime.parse(startTime.replace("9999-99-99", "2000-01-01"), formatter) // Random date substitute, doesn't matter
+                        date = date.plusMinutes(schedule.offset)
 
                         if (dateStr.equals("9999-99-99")) {
                             // When adding offsets for time only vars, it messes up the default 9999-99-99 format so we need to reformat it that way
-                            startTime = date.format("'9999-99-99T'HH:mm:ss.sssXX")
+                            formatter = DateTimeFormatter.ofPattern("'9999-99-99T'HH:mm:ss.SSSXX")
+                            startTime = date.format(formatter)
                         } else {
-                            startTime = date.format("yyyy-MM-dd'T'HH:mm:ss.sssXX")
+                            formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXX")
+                            startTime = date.format(formatter)
                         }
                     }
                     schedule.startTime = startTime
@@ -846,6 +1193,22 @@ private getValueForHubVariable(name) {
     return null
 }
 
+private formatHubVariableNameWithTime(hubVariable, startTime) {
+    def dtString = ""
+    def date = getDateFromDateTimeString(startTime)
+    if (!date.equals("9999-99-99")) {
+        dtString += "$date"
+    }
+    def time = getTimeFromDateTimeString(startTime)
+    if (!time.equals("99:99")) {
+        if (dtString.length() > 0) {
+            dtString += "<br>"
+        }
+        dtString += time
+    }
+    return "$hubVariable<br>($dtString)"
+}
+
 private getTimeFromDateTimeString(dt) {
     return dt.substring(11, dt.length() - 12)
 }
@@ -867,7 +1230,11 @@ def getFormat(type, myText = "") {
 
 // Helper to generate & format a button
 String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15px") {
-    "<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"
+    def (action, deviceId, scheduleId) = btnName.tokenize('|')
+    if (["editStartTime", "newOffset", "desiredLevel", "selectVariableStartTime"].contains(action)) {
+        return """<button type="button" name="${btnName}" id="${btnName}" title="Button" onClick='${action}Popup("${deviceId}", "${scheduleId}", "${linkText}")' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block;background:none;border:none'>${linkText}</button>"""
+    }
+    return """<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"""
 }
 
 // Generate a new, empty schedule
@@ -984,12 +1351,12 @@ def updated() {  // runs every 'Done' on already installed app
     refreshVariables()
     buildCron()  // build schedules
     initialize()  // set schedules and subscribes
+    if (!state.accessToken) {
+        createAccessToken()
+    }
 }
 
 def installed() {  // only runs once for new app 'Done' or first time open
     logDebug "installed called"
     updated()
 }
-
-
-
