@@ -63,7 +63,10 @@
  *                     - Fix null pointer that happened occasionally when a new device was added
  *  2.0.1 - 2025-04-03 - Fix app version not showing properly
  *  2.0.2 - 2025-04-21 - Fix error when offset is applied to "time" or "date" only Hub Variables
- *
+ *  3.0.0 - 2025-06-05 - BREAKING CHANGE - OAuth required to edit schedules
+ *                     - Schedules will continue to run even if oauth is not enabled
+ *                     - Modernize UI - Better looking table, popup system for inputs
+ *                     - Add ability to manually refresh OAuth token
  */
 
 import groovy.json.JsonOutput
@@ -73,7 +76,7 @@ import java.time.ZonedDateTime
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "2.0.1"
+    state.version = "3.0.0"
 }
 
 definition(
@@ -148,7 +151,7 @@ def mainPage() {
                     state.devices.remove(deviceId)
                 }
 
-                paragraph displayTable()
+                paragraph loadCSS() + loadScript() + displayTable()
             }
         }
 
@@ -157,6 +160,7 @@ def mainPage() {
 
         section(getFormat("header", "Advanced Options"), hideable: true, hidden: false) {
             input "updateButton", "button", title: "Update/Store schedules without hitting Done"
+            input "refreshOAuthToken", "button", title: "Refresh OAuth Token"
             input name: "modeBool", type: "bool", title: getFormat("important2", "<b>Only run schedules during a selected mode?</b><br><small>Home, Away,.. Applies to all Devices</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (modeBool) {
                 input name: "mode", type: "mode", title: getFormat("important2", "<b>Select mode(s) for schedules to run</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px', multiple: true
@@ -175,16 +179,29 @@ def mainPage() {
 //****  Notes Section ****//
 
         section(getFormat("header", "Usage Notes"), hideable: true, hidden: hide) {
-            paragraph getFormat("lessImportant", "<ul>" +
-                    "<li>Use for any switch, outlet or dimmer. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>" +
-                    "<li>Enter Start time in 24 hour format.</li>" +
-                    "<li>To use Sunset/Sunrise with +/- offset, check box, check sunrise or sunset icon, click number to enter offset.</li>" +
-                    "<li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>" +
-                    "<li>Optional: Select which modes to run schedules for.</li>" +
-                    "<li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>" +
-                    "<li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>" +
-                    "<li>Optional: Select whether you want to pause all schedules.</li>" +
-                    "</ul>")
+            paragraph """
+                <ul>
+                    <li>Use for any switch, outlet or dimmer. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
+                    <li>In order to use this app, you must enable OAuth. This can be done by opening the Hubitat sidenav and clicking 'Apps Code'. Find 'Schedule Manager (Child App)'' and click it. This opens code editor. On the top right, click the three stacked dots to open the menu and select 'OAuth' > 'Enable OAuth in App.</li>
+                    <li>If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of this instance in order for the app to get the new token.</li>
+                    <li>Enter Start time in 24 hour format.</li>
+                    <li>To use Sunset/Sunrise with/- offset, check 'Use Sun Set/Rise' box, check sunrise or sunset icon, click number to enter offset.</li>
+                    <li>To use Hub Variables with/- offset, check 'Use Hub Variable' box, select your variable, click number to enter offset.</li>
+                    <li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>
+                    <li>Optional: Select which modes to run schedules for.</li>
+                    <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>
+                    <li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
+                    <li>Optional: Select whether you want to pause all schedules.</li>
+                </ul>"""
+        }
+
+        section(getFormat("header", "Support")) {
+            paragraph """
+                <ul>
+                    <li>Donations are welcome and appreciated! Support the project using <a href='https://www.paypal.com/donate/?hosted_button_id=P38WNJK735N9N'>PayPal</a> or <a href='https://venmo.com/u/Evan-Callia'>Venmo</a>.</li>
+                    <li><b>Need help?</b> Visit the <a href='https://community.hubitat.com/t/release-schedule-manager-app/145646' target='_blank'>Hubitat Community</a> for support.</li>
+                    <li><b>Found a bug?</b> Please post it on the community thread or report it on the <a href='https://github.com/evcallia/hubitat/tree/main/apps/schedule-manager'>GitHub Repository</a> by opening an issue.</li>
+                </ul>"""
         }
     }
 }
@@ -269,7 +286,402 @@ def getHubVariableOptions() {
 }
 
 
-//****  Main Table ****//
+//****  JS for Table  ****//
+String loadCSS() {
+    return """
+        <style>
+            .mdl-data-table {
+                width: 100%;
+                border-collapse: collapse;
+                border: 1px solid #E0E0E0;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                border-radius: 4px;
+                overflow: hidden;
+                margin-bottom: 20px;
+            }
+            .mdl-data-table thead {
+                background-color: #F5F5F5;
+            }
+            .mdl-data-table th {
+                font-size: 14px !important;
+                font-weight: 500;
+                color: #424242;
+                padding: 8px !important;
+                text-align: center;
+                border-bottom: 2px solid #E0E0E0;
+                border-right: 1px solid #E0E0E0;
+            }
+            th.prominent-border-right,
+            td.prominent-border-right {
+                border-right: 1px solid gray !important;
+            }
+            td.prominent-border-bottom {
+                border-bottom: 1px solid gray !important;
+            }
+            .mdl-data-table td {
+                font-size: 14px !important;
+                padding: 6px 4px !important;
+                text-align: center;
+                border-bottom: 1px solid #EEEEEE;
+                border-right: 1px solid #EEEEEE;
+            }
+            .mdl-data-table tbody tr:hover {
+                background-color: inherit !important;
+            }
+            .device-section {
+                font-weight: 500;
+            }
+            .device-link a {
+                color: #2196F3;
+                text-decoration: none;
+                font-weight: 500;
+            }
+            .device-link a:hover {
+                text-decoration: underline;
+            }
+            .mdl-cell .mdl-textfield div {
+              white-space: normal !important;
+            }
+
+            /* Popup styles */
+            .popup-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.5);
+                display: none;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+            .popup-container {
+                background-color: #FFFFFF;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                padding: 20px;
+                max-width: 400px;
+                width: 90%;
+                position: relative;
+            }
+            .popup-title {
+                font-size: 18px;
+                font-weight: 500;
+                color: #212121;
+                margin-bottom: 15px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #EEEEEE;
+            }
+            .popup-content {
+                margin-bottom: 20px;
+            }
+            .popup-buttons {
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+            }
+            .popup-btn {
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: 500;
+                cursor: pointer;
+                border: none;
+                outline: none;
+            }
+            .popup-btn-primary {
+                background-color: #2196F3;
+                color: white;
+            }
+            .popup-btn-secondary {
+                background-color: #E0E0E0;
+                color: #424242;
+            }
+            .popup-close {
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                font-size: 20px;
+                cursor: pointer;
+                color: #9E9E9E;
+            }
+            .popup-input {
+                width: 100%;
+                padding: 10px;
+                border-radius: 4px;
+                border: 1px solid #E0E0E0;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            .popup-label {
+                display: block;
+                font-size: 14px;
+                color: #616161;
+                margin-bottom: 5px;
+            }
+        </style>
+    """
+}
+
+//****  JS for Table  ****//
+String loadScript() {
+    return """
+        <script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>
+        <script>
+            // Remove some extra whitespace around Hubitat 'paragraph'
+            document.querySelectorAll('.mdl-cell.mdl-textfield > div').forEach(el => {
+                el.style.removeProperty('white-space');
+            });
+
+            // Popup system
+            function showPopup(title, content, submitCallback) {
+                // Create popup elements
+                const overlay = document.createElement('div');
+                overlay.className = 'popup-overlay';
+
+                const container = document.createElement('div');
+                container.className = 'popup-container';
+
+                const closeBtn = document.createElement('div');
+                closeBtn.className = 'popup-close';
+                closeBtn.innerHTML = '&times;';
+                closeBtn.onclick = hidePopup;
+
+                const titleEl = document.createElement('div');
+                titleEl.className = 'popup-title';
+                titleEl.innerText = title;
+
+                const contentEl = document.createElement('div');
+                contentEl.className = 'popup-content';
+                contentEl.innerHTML = content;
+
+                const buttonsEl = document.createElement('div');
+                buttonsEl.className = 'popup-buttons';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'popup-btn popup-btn-secondary';
+                cancelBtn.innerText = 'Cancel';
+                cancelBtn.onclick = hidePopup;
+
+                const submitBtn = document.createElement('button');
+                submitBtn.className = 'popup-btn popup-btn-primary';
+                submitBtn.innerText = 'Submit';
+                submitBtn.onclick = function() {
+                    submitCallback(overlay);
+                };
+
+                // Build popup structure
+                buttonsEl.appendChild(cancelBtn);
+                buttonsEl.appendChild(submitBtn);
+
+                container.appendChild(closeBtn);
+                container.appendChild(titleEl);
+                container.appendChild(contentEl);
+                container.appendChild(buttonsEl);
+
+                overlay.appendChild(container);
+
+                // Add to document and show
+                document.body.appendChild(overlay);
+                setTimeout(() => {
+                    overlay.style.display = 'flex';
+                    // Focus the first input if exists
+                    const firstInput = overlay.querySelector('input, select');
+                    if (firstInput) firstInput.focus();
+                }, 10);
+
+                return overlay;
+            }
+
+            function hidePopup() {
+                const overlays = document.querySelectorAll('.popup-overlay');
+                overlays.forEach(overlay => {
+                    overlay.style.display = 'none';
+                    setTimeout(() => {
+                        overlay.remove();
+                    }, 300);
+                });
+            }
+
+            // Time input popup
+            function editStartTimePopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter Desired Time</label>
+                    <input type="time" class="popup-input" id="timeInput" value="\${currentValue || ''}">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Applies to all checked days for this device.</p>
+                `;
+
+                showPopup("Set Schedule Time", content, (popup) => {
+                    const input = popup.querySelector('#timeInput');
+                    if (input.value) {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateTime?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            startTime: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId).innerHTML = timeInput.value;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Offset input popup
+            function newOffsetPopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter +/- Offset time (in minutes)</label>
+                    <input type="number" class="popup-input" id="offsetInput" value="\${currentValue || '0'}">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Examples: 30, -30, or -90. Applied to Sunrise/Sunset or Hub Variable time.</p>
+                `;
+
+                showPopup("Set Time Offset", content, (popup) => {
+                    const input = popup.querySelector('#offsetInput');
+                    if (input.value !== '') {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateOffset?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            offset: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                const jsonResponse = JSON.parse(xhr.responseText);
+                                const newStartTime = jsonResponse.startTime;
+                                const varType = jsonResponse.varType;
+
+                                var idPrefix = ""
+                                if (varType === "hubVariable") {
+                                    idPrefix = "selectVariableStartTime|";
+                                } else {
+                                    idPrefix = "editStartTime|";
+                                }
+
+                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId).innerHTML = input.value;
+                                document.getElementById(idPrefix + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Dimmer level popup
+            function desiredLevelPopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter Dimmer Level (1-100)</label>
+                    <input type="number" class="popup-input" id="levelInput" value="\${currentValue || '100'}" min="0" max="100">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Set the desired brightness level when the device turns on.</p>
+                `;
+
+                showPopup("Set Dimmer Level", content, (popup) => {
+                    const input = popup.querySelector('#levelInput');
+                    if (input.value !== '' && input.value >= 0 && input.value <= 100) {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateDesiredLevel?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            level: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                document.getElementById("desiredLevel|" + deviceId + "|" + scheduleId).innerHTML = input.value;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Hub Variable popup
+            function selectVariableStartTimePopup(deviceId, scheduleId, currentValue) {
+                const fetchOptions = () => {
+                    return fetch('/apps/api/${app.id}/getHubVariableOptions?access_token=${state.accessToken}')
+                        .then(response => response.json())
+                        .catch(error => {
+                            console.error('Error fetching variable options:', error);
+                            return {};
+                        });
+                };
+
+                fetchOptions().then(options => {
+                    console.log("fetched options: " + options)
+                    // Create a select dropdown from the options
+                    let optionsHtml = '<label class="popup-label">Select Hub Variable</label>';
+                    optionsHtml += '<select class="popup-input" id="variableSelect">';
+
+                    // Add options from the server
+                    for (const [key, value] of Object.entries(options)) {
+                        const selected = currentValue === key ? 'selected' : '';
+                        optionsHtml += '<option value="' + key + '" ' + selected + '>' + value + '</option>';
+                    }
+
+                    optionsHtml += '</select>';
+                    optionsHtml += '<p style="font-size:12px;color:#757575;margin-top:5px;">Select a Hub Variable to use as the schedule time.</p>';
+
+                    showPopup("Select Hub Variable", optionsHtml, (popup) => {
+                        const input = popup.querySelector('#variableSelect');
+                        if (input.value) {
+                            // Send request to hubitat app api to handle state change
+                            var xhr = new XMLHttpRequest();
+                            xhr.open('POST', '/apps/api/${app.id}/updateHubVariable?access_token=${state.accessToken}', true);
+                            xhr.setRequestHeader('Content-Type', 'application/json');
+
+                            var data = JSON.stringify({
+                                deviceId: deviceId,
+                                scheduleId: scheduleId,
+                                hubVariable: input.value
+                            });
+
+                            xhr.onreadystatechange = function() {
+                                if (xhr.readyState === 4 && xhr.status === 200) {
+                                    // When successful, update the input field in the table so we don't need to page refresh
+                                    const jsonResponse = JSON.parse(xhr.responseText);
+                                    const newStartTime = jsonResponse.startTime;
+
+                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                                }
+                            };
+
+                            xhr.send(data);
+                        }
+                        hidePopup();
+                    });
+                });
+            }
+        </script>
+    """
+}
+
+//****  Main Table  ****//
 
 String displayTable() {
     // Sunday - Saturday Check Boxes
@@ -437,394 +849,32 @@ String displayTable() {
         state.remove("desiredState")
     }
 
-    // Configure table, scripts and css
-    String str = "<script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>"
-    str += """<style>
-            .mdl-data-table {
-                width: 100%;
-                border-collapse: collapse;
-                border: 1px solid #E0E0E0;
-                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-                border-radius: 4px;
-                overflow: hidden;
-                margin-bottom: 20px;
-            }
-            .mdl-data-table thead {
-                background-color: #F5F5F5;
-            }
-            .mdl-data-table th {
-                font-size: 14px !important;
-                font-weight: 500;
-                color: #424242;
-                padding: 8px !important;
-                text-align: center;
-                border-bottom: 2px solid #E0E0E0;
-                border-right: 1px solid #E0E0E0;
-            }
-            .mdl-data-table td {
-                font-size: 14px !important;
-                padding: 6px 4px !important;
-                text-align: center;
-                border-bottom: 1px solid #EEEEEE;
-                border-right: 1px solid #EEEEEE;
-            }
-            .mdl-data-table tbody tr:hover {
-                background-color: inherit !important;
-            }
-            .device-section {
-                font-weight: 500;
-            }
-            .device-link a {
-                color: #2196F3;
-                text-decoration: none;
-                font-weight: 500;
-            }
-            .device-link a:hover {
-                text-decoration: underline;
-            }
-
-            /* Popup styles */
-            .popup-overlay {
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background-color: rgba(0, 0, 0, 0.5);
-                display: none;
-                justify-content: center;
-                align-items: center;
-                z-index: 1000;
-            }
-            .popup-container {
-                background-color: #FFFFFF;
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-                padding: 20px;
-                max-width: 400px;
-                width: 90%;
-                position: relative;
-            }
-            .popup-title {
-                font-size: 18px;
-                font-weight: 500;
-                color: #212121;
-                margin-bottom: 15px;
-                padding-bottom: 10px;
-                border-bottom: 1px solid #EEEEEE;
-            }
-            .popup-content {
-                margin-bottom: 20px;
-            }
-            .popup-buttons {
-                display: flex;
-                justify-content: flex-end;
-                gap: 10px;
-            }
-            .popup-btn {
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-size: 14px;
-                font-weight: 500;
-                cursor: pointer;
-                border: none;
-                outline: none;
-            }
-            .popup-btn-primary {
-                background-color: #2196F3;
-                color: white;
-            }
-            .popup-btn-secondary {
-                background-color: #E0E0E0;
-                color: #424242;
-            }
-            .popup-close {
-                position: absolute;
-                top: 15px;
-                right: 15px;
-                font-size: 20px;
-                cursor: pointer;
-                color: #9E9E9E;
-            }
-            .popup-input {
-                width: 100%;
-                padding: 10px;
-                border-radius: 4px;
-                border: 1px solid #E0E0E0;
-                font-size: 14px;
-                margin-bottom: 10px;
-            }
-            .popup-label {
-                display: block;
-                font-size: 14px;
-                color: #616161;
-                margin-bottom: 5px;
-            }
-            </style>
-
-            <script>
-            // Popup system
-            function showPopup(title, content, submitCallback) {
-                // Create popup elements
-                const overlay = document.createElement('div');
-                overlay.className = 'popup-overlay';
-
-                const container = document.createElement('div');
-                container.className = 'popup-container';
-
-                const closeBtn = document.createElement('div');
-                closeBtn.className = 'popup-close';
-                closeBtn.innerHTML = '&times;';
-                closeBtn.onclick = hidePopup;
-
-                const titleEl = document.createElement('div');
-                titleEl.className = 'popup-title';
-                titleEl.innerText = title;
-
-                const contentEl = document.createElement('div');
-                contentEl.className = 'popup-content';
-                contentEl.innerHTML = content;
-
-                const buttonsEl = document.createElement('div');
-                buttonsEl.className = 'popup-buttons';
-
-                const cancelBtn = document.createElement('button');
-                cancelBtn.className = 'popup-btn popup-btn-secondary';
-                cancelBtn.innerText = 'Cancel';
-                cancelBtn.onclick = hidePopup;
-
-                const submitBtn = document.createElement('button');
-                submitBtn.className = 'popup-btn popup-btn-primary';
-                submitBtn.innerText = 'Submit';
-                submitBtn.onclick = function() {
-                    submitCallback(overlay);
-                };
-
-                // Build popup structure
-                buttonsEl.appendChild(cancelBtn);
-                buttonsEl.appendChild(submitBtn);
-
-                container.appendChild(closeBtn);
-                container.appendChild(titleEl);
-                container.appendChild(contentEl);
-                container.appendChild(buttonsEl);
-
-                overlay.appendChild(container);
-
-                // Add to document and show
-                document.body.appendChild(overlay);
-                setTimeout(() => {
-                    overlay.style.display = 'flex';
-                    // Focus the first input if exists
-                    const firstInput = overlay.querySelector('input, select');
-                    if (firstInput) firstInput.focus();
-                }, 10);
-
-                return overlay;
-            }
-
-            function hidePopup() {
-                const overlays = document.querySelectorAll('.popup-overlay');
-                overlays.forEach(overlay => {
-                    overlay.style.display = 'none';
-                    setTimeout(() => {
-                        overlay.remove();
-                    }, 300);
-                });
-            }
-
-            // Time input popup
-            function editStartTimePopup(deviceId, scheduleId, currentValue) {
-                const content = `
-                    <label class="popup-label">Enter Desired Time</label>
-                    <input type="time" class="popup-input" id="timeInput" value="${currentValue || ''}">
-                    <p style="font-size:12px;color:#757575;margin-top:5px;">Applies to all checked days for this device.</p>
-                `;
-
-                showPopup("Set Schedule Time", content, (popup) => {
-                    const input = popup.querySelector('#timeInput');
-                    if (input.value) {
-                        // Send request to hubitat app api to handle state change
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', '/apps/api/${app.id}/updateTime?access_token=${state.accessToken}', true);
-                        xhr.setRequestHeader('Content-Type', 'application/json');
-
-                        var data = JSON.stringify({
-                            deviceId: deviceId,
-                            scheduleId: scheduleId,
-                            startTime: input.value
-                        });
-
-                        xhr.onreadystatechange = function() {
-                            if (xhr.readyState === 4 && xhr.status === 200) {
-                                // When successful, update the input field in the table so we don't need to page refresh
-                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId).innerHTML = timeInput.value;
-                            }
-                        };
-
-                        xhr.send(data);
-                    }
-                    hidePopup();
-                });
-            }
-
-            // Offset input popup
-            function newOffsetPopup(deviceId, scheduleId, currentValue) {
-                const content = `
-                    <label class="popup-label">Enter +/- Offset time (in minutes)</label>
-                    <input type="number" class="popup-input" id="offsetInput" value="${currentValue || '0'}">
-                    <p style="font-size:12px;color:#757575;margin-top:5px;">Examples: 30, -30, or -90. Applied to Sunrise/Sunset or Hub Variable time.</p>
-                `;
-
-                showPopup("Set Time Offset", content, (popup) => {
-                    const input = popup.querySelector('#offsetInput');
-                    if (input.value !== '') {
-                        // Send request to hubitat app api to handle state change
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', '/apps/api/${app.id}/updateOffset?access_token=${state.accessToken}', true);
-                        xhr.setRequestHeader('Content-Type', 'application/json');
-
-                        var data = JSON.stringify({
-                            deviceId: deviceId,
-                            scheduleId: scheduleId,
-                            offset: input.value
-                        });
-
-                        xhr.onreadystatechange = function() {
-                            if (xhr.readyState === 4 && xhr.status === 200) {
-                                // When successful, update the input field in the table so we don't need to page refresh
-                                const jsonResponse = JSON.parse(xhr.responseText);
-                                const newStartTime = jsonResponse.startTime;
-                                const varType = jsonResponse.varType;
-
-                                var idPrefix = ""
-                                if (varType === "hubVariable") {
-                                    idPrefix = "selectVariableStartTime|";
-                                } else {
-                                    idPrefix = "editStartTime|";
-                                }
-
-                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId).innerHTML = input.value;
-                                document.getElementById(idPrefix + deviceId + "|" + scheduleId).innerHTML = newStartTime;
-                            }
-                        };
-
-                        xhr.send(data);
-                    }
-                    hidePopup();
-                });
-            }
-
-            // Dimmer level popup
-            function desiredLevelPopup(deviceId, scheduleId, currentValue) {
-                const content = `
-                    <label class="popup-label">Enter Dimmer Level (1-100)</label>
-                    <input type="number" class="popup-input" id="levelInput" value="${currentValue || '100'}" min="0" max="100">
-                    <p style="font-size:12px;color:#757575;margin-top:5px;">Set the desired brightness level when the device turns on.</p>
-                `;
-
-                showPopup("Set Dimmer Level", content, (popup) => {
-                    const input = popup.querySelector('#levelInput');
-                    if (input.value !== '' && input.value >= 0 && input.value <= 100) {
-                        // Send request to hubitat app api to handle state change
-                        var xhr = new XMLHttpRequest();
-                        xhr.open('POST', '/apps/api/${app.id}/updateDesiredLevel?access_token=${state.accessToken}', true);
-                        xhr.setRequestHeader('Content-Type', 'application/json');
-
-                        var data = JSON.stringify({
-                            deviceId: deviceId,
-                            scheduleId: scheduleId,
-                            level: input.value
-                        });
-
-                        xhr.onreadystatechange = function() {
-                            if (xhr.readyState === 4 && xhr.status === 200) {
-                                // When successful, update the input field in the table so we don't need to page refresh
-                                document.getElementById("desiredLevel|" + deviceId + "|" + scheduleId).innerHTML = input.value;
-                            }
-                        };
-
-                        xhr.send(data);
-                    }
-                    hidePopup();
-                });
-            }
-
-            // Hub Variable popup
-            function selectVariableStartTimePopup(deviceId, scheduleId, currentValue) {
-                const fetchOptions = () => {
-                    return fetch('/apps/api/${app.id}/getHubVariableOptions?access_token=${state.accessToken}')
-                        .then(response => response.json())
-                        .catch(error => {
-                            console.error('Error fetching variable options:', error);
-                            return {};
-                        });
-                };
-
-                fetchOptions().then(options => {
-                    console.log("fetched options: " + options)
-                    // Create a select dropdown from the options
-                    let optionsHtml = '<label class="popup-label">Select Hub Variable</label>';
-                    optionsHtml += '<select class="popup-input" id="variableSelect">';
-
-                    // Add options from the server
-                    for (const [key, value] of Object.entries(options)) {
-                        const selected = currentValue === key ? 'selected' : '';
-                        optionsHtml += '<option value="' + key + '" ' + selected + '>' + value + '</option>';
-                    }
-
-                    optionsHtml += '</select>';
-                    optionsHtml += '<p style="font-size:12px;color:#757575;margin-top:5px;">Select a Hub Variable to use as the schedule time.</p>';
-
-                    showPopup("Select Hub Variable", optionsHtml, (popup) => {
-                        const input = popup.querySelector('#variableSelect');
-                        if (input.value) {
-                            // Send request to hubitat app api to handle state change
-                            var xhr = new XMLHttpRequest();
-                            xhr.open('POST', '/apps/api/${app.id}/updateHubVariable?access_token=${state.accessToken}', true);
-                            xhr.setRequestHeader('Content-Type', 'application/json');
-
-                            var data = JSON.stringify({
-                                deviceId: deviceId,
-                                scheduleId: scheduleId,
-                                hubVariable: input.value
-                            });
-
-                            xhr.onreadystatechange = function() {
-                                if (xhr.readyState === 4 && xhr.status === 200) {
-                                    // When successful, update the input field in the table so we don't need to page refresh
-                                    const jsonResponse = JSON.parse(xhr.responseText);
-                                    const newStartTime = jsonResponse.startTime;
-
-                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId).innerHTML = newStartTime;
-                                }
-                            };
-
-                            xhr.send(data);
-                        }
-                        hidePopup();
-                    });
-                });
-            }
-            </script>
-
-            <div style='overflow-x:auto'><table class='mdl-data-table'>""" +
-            "<thead><tr><th>#</th>" +
-            "<th>Device</th>" +
-            "<th>Current<br>State</th>" +
-            "<th>Type</th>" +
-            "<th style='border-right:1px solid gray'>Add<br>Run</th>" +
-            "<th style='width: 60px !important'>Run<br>Time</th>" +
-            "<th>Use Hub<br>Variable?</th>" +
-            "<th>Use Sun<br>Set/Rise?</th>" +
-            "<th>Rise or<br>Set?</th>" +
-            "<th>Offset<br>+/-Min</th>" +
-            "<th>Sun</th>" + "<th>Mon</th>" + "<th>Tue</th>" + "<th>Wed</th>" + "<th>Thu</th>" + "<th>Fri</th>" + "<th>Sat</th>" +
-            "<th>Pause<br>Schedule</th>" +
-            "<th>Desired<br>State</th>" +
-            "<th style='border-right:1px solid gray'>Desired<br>Level</th>" +
-            "<th>Remove<br>Run</th>" +
-            "</tr></thead>"
+    // Configure table
+    String str = loadCSS() + loadScript() + """
+        <div style='overflow-x:auto'><table class='mdl-data-table'>
+        <thead><tr><th>#</th>
+        <th>Device</th>
+        <th>Current<br>State</th>
+        <th>Type</th>
+        <th class='prominent-border-right'>Add<br>Run</th>
+        <th style='width: 60px !important'>Run<br>Time</th>
+        <th>Use Hub<br>Variable?</th>
+        <th>Use Sun<br>Set/Rise?</th>
+        <th>Rise or<br>Set?</th>
+        <th>Offset<br>+/-Min</th>
+        <th>Sun</th>
+        <th>Mon</th>
+        <th>Tue</th>
+        <th>Wed</th>
+        <th>Thu</th>
+        <th>Fri</th>
+        <th>Sat</th>
+        <th>Pause<br>Schedule</th>
+        <th>Desired<br>State</th>
+        <th class='prominent-border-right'>Desired<br>Level</th>
+        <th>Remove<br>Run</th>
+        </tr></thead>
+    """
 
     int zone = 0
     devices.sort { it.displayName.toLowerCase() }.each { dev ->
@@ -838,23 +888,26 @@ String displayTable() {
         int scheduleCount = state.devices["$dev.id"].schedules.size()
         boolean deviceIsDimmer = dev.capabilities.find { it.name == "SwitchLevel" } != null
 
-        str += "<tr class='device-section'><td rowspan='$scheduleCount'>$thisZone</td>" +
-                "<td rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
+        def prominentBorderBottom = (zone != devices.size()) ? "class='prominent-border-bottom'" : ""
+        str += "<tr class='device-section'>" +
+                   "<td $prominentBorderBottom rowspan='$scheduleCount'>$thisZone</td>" +
+                   "<td $prominentBorderBottom rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
 
         if (dev.currentSwitch) {
-            str += "<td rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "#4CAF50" : "#F44336"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "#4CAF50" : "#F44336"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
         } else if (dev.currentValve) {
-            str += "<td rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "#4CAF50" : "#F44336"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "#4CAF50" : "#F44336"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         }
 
         if (deviceIsDimmer) {
             String typeButton = (state.devices["$dev.id"].capability == "Switch") ? buttonLink("setCapabilityDimmer|$dev.id", "Switch", "#2196F3") : buttonLink("setCapabilitySwitch|$dev.id", "Dimmer", "#2196F3")
-            str += "<td rowspan='$scheduleCount' style='font-weight:bold' title='Capability: Dimmer'>$typeButton</td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: Dimmer'>$typeButton</td>"
         } else {
-            str += "<td rowspan='$scheduleCount' title='Capability: Switch'>Switch</td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: Switch'>Switch</td>"
         }
 
-        str += "<td rowspan='$scheduleCount' style='border-right:1px solid gray' title='Click to add new time for this device'>$addNewRunButton</td>"
+        def prominentBorders = (zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+        str += "<td $prominentBorders rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
 
         //**** Update sunrise/set & hub variable times ****//
         refreshVariables()
@@ -899,7 +952,9 @@ String displayTable() {
 
         //**** Iterate each schedule, configuring the 'schedule' section of the table ****//
 
+        def num_schedules = state.devices["$dev.id"].schedules.size()
         sortedSchedules.each { scheduleId, schedule ->
+            num_schedules = num_schedules - 1
             String thisStartTime = getTimeFromDateTimeString(schedule.startTime)
             String thisOffsetTime = schedule.offset
             String deviceAndScheduleId = "${dev.id}|$scheduleId"
@@ -937,47 +992,49 @@ String displayTable() {
             String desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
+            def td_border_bottom = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
             if (schedule.sunTime) {
-                str += "<td id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
-                        "<td>Using Sun<br>Time</td>"
+                str += "<td $td_border_bottom id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
+                        "<td $td_border_bottom>Using Sun<br>Time</td>"
             } else if (schedule.useVariableTime){
-                str += "<td title='Select Hub Variable'>$startTime</td>" +
-                        "<td title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+                str += "<td $td_border_bottom title='Select Hub Variable'>$startTime</td>" +
+                        "<td $td_border_bottom title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             } else {
-                str += "<td style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
-                        "<td title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+                str += "<td $td_border_bottom style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
+                        "<td $td_border_bottom title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             }
 
             if (schedule.useVariableTime) {
-                str += "<td colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
-                       "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                str += "<td $td_border_bottom colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                       "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
             } else {
-                str += "<td title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
+                str += "<td $td_border_bottom title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
                 if (schedule.sunTime) {
-                    str += "<td title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
-                            "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                    str += "<td $td_border_bottom title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
+                            "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
                 } else {
-                    str += "<td colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                    str += "<td $td_border_bottom colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
                 }
             }
 
-            str += "<td title='Check Box to select Day'>$sunCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$monCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$tueCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$wedCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$thuCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$friCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$satCheckBoxT</td>" +
-                    "<td title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
-                    "<td title='Click to change desired state'>$desiredStateButton</td>"
+            str += "<td $td_border_bottom title='Check Box to select Day'>$sunCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$monCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$tueCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$wedCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$thuCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$friCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$satCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Click to change desired state'>$desiredStateButton</td>"
 
+            def td_borders = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
             if (state.devices["$dev.id"].capability == "Switch" || schedule.desiredState == "off") {
-                str += "<td style='border-right:1px solid gray'></td>"
+                str += "<td $td_borders></td>"
             } else {
-                str += "<td style='border-right:1px solid gray; font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
+                str += "<td $td_borders style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
             }
 
-            str += "<td title='Click to remove run'>$removeRunButton</td></tr>"
+            str += "<td $td_border_bottom title='Click to remove run'>$removeRunButton</td></tr>"
         }
     }
     str += "</table></div>"
@@ -1060,6 +1117,7 @@ def logsOff() {
 
 void appButtonHandler(btn) {
     if (btn == "updateButton") updated()
+    if (btn == "refreshOAuthToken") createAccessToken()
     else if (btn.startsWith("sunUnChecked|")) state.sunUnCheckedBox = btn.minus("sunUnChecked|")
     else if (btn.startsWith("sunChecked|")) state.sunCheckedBox = btn.minus("sunChecked|")
     else if (btn.startsWith("monUnChecked|")) state.monUnCheckedBox = btn.minus("monUnChecked|")

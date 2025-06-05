@@ -10,6 +10,7 @@ to manually pause all schedules.
 ## Features
 - Schedule any number of switches/dimmers
 - Schedules based on selected time or sunrise/set with offset
+- Schedules based on Hub Variable time (date, time or datetime)
 - Individual schedules may be paused
 - Set desired state for switch/dimmer to be in at specified time
 - [Optional] Configure which modes to run schedules for
@@ -20,6 +21,12 @@ to manually pause all schedules.
 Add code for parent app and then and child app. Install/create new instance of parent app and begin using.
 
 You may also install via Hubitat Package Manager. Search for "Schedule Manager" and follow installation instructions.
+
+The child app requires oauth in order to edit schedules. You can enable this by opening the Hubitat sidenav and clicking 
+"Apps Code". Find "Schedule Manager (Child App)" and click it. This opens code editor. On the top right, click the 
+three stacked dots to open the menu and select "OAuth" > "Enable OAuth in App. 
+
+If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of each child instance in order for the app to get the new token.
 
 ### Example
 Here we'll walk through the setup of an app
