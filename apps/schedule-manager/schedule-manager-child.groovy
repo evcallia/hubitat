@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2024-11-25
+ *  Last modified: 2025-08-12
  *
  *  Changelog:
  *
@@ -63,10 +63,12 @@
  *                     - Fix null pointer that happened occasionally when a new device was added
  *  2.0.1 - 2025-04-03 - Fix app version not showing properly
  *  2.0.2 - 2025-04-21 - Fix error when offset is applied to "time" or "date" only Hub Variables
- *  3.0.0 - 2025-06-05 - BREAKING CHANGE - OAuth required to edit schedules
+ *  3.0.0 - 2025-08-12 - BREAKING CHANGE - OAuth required to edit schedules
  *                     - Schedules will continue to run even if oauth is not enabled
  *                     - Modernize UI - Better looking table, popup system for inputs
  *                     - Add ability to manually refresh OAuth token
+ *                     - Add support for button devices - push, doubleTap, hold, release
+ *                     - Refresh schedules when hub restarts
  */
 
 import groovy.json.JsonOutput
@@ -82,11 +84,11 @@ def titleVersion() {
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia-dev",
+        namespace: "evcallia",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia-dev:Schedule Manager",
+        parent: "evcallia:Schedule Manager",
         iconUrl: "",
         iconX2Url: "",
         oauth: true
@@ -112,13 +114,14 @@ def mainPage() {
 
         section(getFormat("header", "Initial Set-Up"), hideable: true, hidden: hide) {
             input name: "appName", type: "string", title: "<b>Name this App</b>", required: true, submitOnChange: true, width: 3
-            input "devices", "capability.switch, capability.SwitchLevel", title: "<b>Select Devices schedule</b>", required: true, multiple: true, submitOnChange: true, width: 6
+            input "devices", "capability.switch, capability.SwitchLevel, capability.doubleTapableButton, capability.holdableButton, capability.pushableButton, capability.releasableButton", title: "<b>Select Devices</b>", required: true, multiple: true, submitOnChange: true, width: 6
 
             devices.each { dev ->
                 if (!state.devices["$dev.id"]) {
+                    def isButton = dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] } != null
                     state.devices["$dev.id"] = [
                         zone: 0,
-                        capability: "Switch",
+                        capability: isButton ? "Button" : (dev.capabilities.find { it.name == "SwitchLevel" } ? "Dimmer" : "Switch"),
                         schedules: [
                             (UUID.randomUUID().toString()): generateDefaultSchedule()
                         ],
@@ -182,7 +185,7 @@ def mainPage() {
             paragraph """
                 <ul>
                     <li>Use for any switch, outlet or dimmer. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
-                    <li>In order to use this app, you must enable OAuth. This can be done by opening the Hubitat sidenav and clicking 'Apps Code'. Find 'Schedule Manager (Child App)'' and click it. This opens code editor. On the top right, click the three stacked dots to open the menu and select 'OAuth' > 'Enable OAuth in App.</li>
+                    <li>In order to use this app, you must enable OAuth. This can be done by opening the Hubitat sidenav and clicking 'Apps Code'. Find 'Schedule Manager (Child App)' and click it. This opens code editor. On the top right, click the three stacked dots to open the menu and select 'OAuth' > 'Enable OAuth in App'.</li>
                     <li>If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of this instance in order for the app to get the new token.</li>
                     <li>Enter Start time in 24 hour format.</li>
                     <li>To use Sunset/Sunrise with/- offset, check 'Use Sun Set/Rise' box, check sunrise or sunset icon, click number to enter offset.</li>
@@ -226,6 +229,10 @@ mappings {
 
     path("/getHubVariableOptions") {
         action: [GET: "getHubVariableOptions"]
+    }
+
+    path("/updateButtonConfig") {
+        action: [POST: "updateButtonConfig"]
     }
 }
 
@@ -285,6 +292,21 @@ def getHubVariableOptions() {
     render contentType: "application/json", data: JsonOutput.toJson(getHubVariableList())
 }
 
+def updateButtonConfig() {
+    logDebug "updateButtonConfig called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def buttonNumber = json.buttonNumber?.toInteger()
+    def buttonAction = json.buttonAction
+    if (buttonNumber != null) {
+        state.devices[deviceId].schedules[scheduleId].buttonNumber = buttonNumber
+    }
+    if (buttonAction) {
+        state.devices[deviceId].schedules[scheduleId].buttonAction = buttonAction
+    }
+    render contentType: "application/json", data: JsonOutput.toJson([success: true])
+}
 
 //****  JS for Table  ****//
 String loadCSS() {
@@ -677,6 +699,32 @@ String loadScript() {
                     });
                 });
             }
+
+            // Button number change
+            function buttonNumberChange(deviceId, scheduleId, value) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/apps/api/${app.id}/updateButtonConfig?access_token=${state.accessToken}', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                var data = JSON.stringify({
+                    deviceId: deviceId,
+                    scheduleId: scheduleId,
+                    buttonNumber: value
+                });
+                xhr.send(data);
+            }
+
+            // Button action change
+            function buttonActionChange(deviceId, scheduleId, value) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/apps/api/${app.id}/updateButtonConfig?access_token=${state.accessToken}', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                var data = JSON.stringify({
+                    deviceId: deviceId,
+                    scheduleId: scheduleId,
+                    buttonAction: value
+                });
+                xhr.send(data);
+            }
         </script>
     """
 }
@@ -837,6 +885,12 @@ String displayTable() {
         state.remove("setCapabilitySwitch")
     }
 
+    if (state.setCapabilityButton) {
+        def deviceId = state.setCapabilityButton
+        state.devices[deviceId].capability = "Button"
+        state.remove("setCapabilityButton")
+    }
+
     // Desired State
     if (state.desiredState) {
         def (deviceId, scheduleId) = state.desiredState.tokenize('|')
@@ -886,7 +940,6 @@ String displayTable() {
         String addNewRunButton = buttonLink("addNew|$dev.id", "<iconify-icon icon='material-symbols:add-circle-outline-rounded'></iconify-icon>", "#4CAF50", "24px")
         int thisZone = state.devices["$dev.id"].zone = zone
         int scheduleCount = state.devices["$dev.id"].schedules.size()
-        boolean deviceIsDimmer = dev.capabilities.find { it.name == "SwitchLevel" } != null
 
         def prominentBorderBottom = (zone != devices.size()) ? "class='prominent-border-bottom'" : ""
         str += "<tr class='device-section'>" +
@@ -897,13 +950,27 @@ String displayTable() {
             str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "#4CAF50" : "#F44336"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
         } else if (dev.currentValve) {
             str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "#4CAF50" : "#F44336"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+        } else {
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount'></td>"
         }
 
-        if (deviceIsDimmer) {
-            String typeButton = (state.devices["$dev.id"].capability == "Switch") ? buttonLink("setCapabilityDimmer|$dev.id", "Switch", "#2196F3") : buttonLink("setCapabilitySwitch|$dev.id", "Dimmer", "#2196F3")
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: Dimmer'>$typeButton</td>"
+        def supportedCapabilities = []
+        if (dev.capabilities.find { it.name == "SwitchLevel" }) {
+            supportedCapabilities.add("Dimmer")
+        }
+        if (dev.capabilities.find { it.name == "Switch" }) {
+            supportedCapabilities.add("Switch")
+        }
+        if (dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] }) {
+            supportedCapabilities.add("Button")
+        }
+
+        if (supportedCapabilities.size() > 1) {
+            int nextIndex = (supportedCapabilities.indexOf(state.devices["$dev.id"].capability) + 1) % supportedCapabilities.size()
+            def capabilityButton = buttonLink("setCapability${supportedCapabilities[nextIndex]}|${dev.id}", state.devices[dev.id].capability, "#2196F3")
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices["$dev.id"].capability}'>$capabilityButton</td>"
         } else {
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: Switch'>Switch</td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices["$dev.id"].capability}'>${state.devices["$dev.id"].capability}</td>"
         }
 
         def prominentBorders = (zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
@@ -992,6 +1059,30 @@ String displayTable() {
             String desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
+            // Handle button device specifics
+            if (state.devices["$dev.id"].capability == "Button") {
+                if (schedule.buttonNumber == null) {
+                    schedule.buttonNumber = 1 // Default to button 1 if not set
+                }
+
+                // For button devices, show button config instead of desired state
+                def buttonCount = dev.currentValue("numberOfButtons") ?: 1
+                def buttonNum = schedule.buttonNumber ?: 1
+                def buttonOptions = (1..buttonCount).collect { n -> "<option value='${n}' ${n==buttonNum?'selected':''}>button ${n}</option>" }.join('')
+                def buttonSelect = "<select id='buttonNumber|${deviceAndScheduleId}' onchange=\"buttonNumberChange('${dev.id}','${scheduleId}',this.value)\">${buttonOptions}</select>"
+
+                def actions = dev.getSupportedCommands()?.collect { it.toString() }.intersect(["doubleTap", "hold", "push", "release"]) ?: ["No commands found"]
+                def actionVal = schedule.buttonAction ?: actions[0]
+                def actionOptions = actions.collect { a -> "<option value='${a}' ${a==actionVal?'selected':''}>${a}</option>" }.join('')
+                def actionSelect = "<select id='buttonAction|${deviceAndScheduleId}' onchange=\"buttonActionChange('${dev.id}','${scheduleId}',this.value)\">${actionOptions}</select>"
+                
+                desiredStateButton = "${actionSelect}<br>${buttonSelect}"
+                desiredLevelButton = ""
+            } else {
+                desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
+                desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
+            }
+
             def td_border_bottom = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
             if (schedule.sunTime) {
                 str += "<td $td_border_bottom id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
@@ -1025,10 +1116,10 @@ String displayTable() {
                     "<td $td_border_bottom title='Check Box to select Day'>$friCheckBoxT</td>" +
                     "<td $td_border_bottom title='Check Box to select Day'>$satCheckBoxT</td>" +
                     "<td $td_border_bottom title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Click to change desired state'>$desiredStateButton</td>"
+                    "<td $td_border_bottom title='${state.devices["$dev.id"].capability == "Button" ? "Button Configuration" : "Click to change desired state"}'>$desiredStateButton</td>"
 
             def td_borders = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
-            if (state.devices["$dev.id"].capability == "Switch" || schedule.desiredState == "off") {
+            if (state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off")) {
                 str += "<td $td_borders></td>"
             } else {
                 str += "<td $td_borders style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
@@ -1072,7 +1163,14 @@ void switchHandler(data) {
 
                 if (validDate) {
                     logDebug "switchHandler - Device: $device; schedule: $schedule"
-                    if (schedule.desiredState == "on") {
+                    if (deviceConfig.capability == "Button") {
+                        if (schedule.buttonNumber && schedule.buttonAction && schedule.buttonAction != "No commands found") {
+                            device."$schedule.buttonAction"(schedule.buttonNumber)
+                            logDebug "$device $schedule.buttonAction $schedule.buttonNumber triggered"
+                        } else {
+                            logError "Cannot perform action \"${schedule.buttonAction}\" on button \"${schedule.buttonNumber}\""
+                        }
+                    } else if (schedule.desiredState == "on") {
                         if (deviceConfig.capability == "Dimmer") {
                             if (activateOnBeforeLevelBool) {
                                 device.on()
@@ -1143,6 +1241,7 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("removeRunTime|")) state.removeRunTime = btn.minus("removeRunTime|")
     else if (btn.startsWith("setCapabilityDimmer|")) state.setCapabilityDimmer = btn.minus("setCapabilityDimmer|")
     else if (btn.startsWith("setCapabilitySwitch|")) state.setCapabilitySwitch = btn.minus("setCapabilitySwitch|")
+    else if (btn.startsWith("setCapabilityButton|")) state.setCapabilityButton = btn.minus("setCapabilityButton|")
     else if (btn.startsWith("desiredState|")) state.desiredState = btn.minus("desiredState|")
     else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
     else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
@@ -1232,6 +1331,11 @@ def buildCron() {
     }
 }
 
+private handleHubBootUp(evt) {
+    logDebug "handleHubBootUp called"
+    updated()
+}
+
 private getHubVariableList() {
     def variables = [:]
 
@@ -1315,7 +1419,9 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             desiredState: "on",
             desiredLevel: 100,
             useVariableTime: false,
-            variableTime: null
+            variableTime: null,
+            buttonNumber: null,
+            buttonAction: null
     ]
 }
 
@@ -1347,6 +1453,8 @@ void logError(msg) {
 
 void initialize() {
     logDebug "initialize() called"
+
+    subscribe(location, "systemStart", handleHubBootUp)
 
     if (logEnableBool) runIn(3600, logsOff)  // Disable all Logging after time elapsed
 
