@@ -121,7 +121,7 @@ def mainPage() {
                     def isButton = dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] } != null
                     state.devices["$dev.id"] = [
                         zone: 0,
-                        capability: isButton ? "Button" : (dev.capabilities.find { it.name == "SwitchLevel" } ? "Dimmer" : "Switch"),
+                        capability: dev.capabilities.find { it.name == "SwitchLevel" } ? "Dimmer" : (isButton? "Button" : "Switch"),
                         schedules: [
                             (UUID.randomUUID().toString()): generateDefaultSchedule()
                         ],
@@ -154,7 +154,7 @@ def mainPage() {
                     state.devices.remove(deviceId)
                 }
 
-                paragraph loadCSS() + loadScript() + displayTable()
+                paragraph displayTable()
             }
         }
 
@@ -446,7 +446,7 @@ String loadCSS() {
     """
 }
 
-//****  JS for Table  ****//
+//****  CSS for Table  ****//
 String loadScript() {
     return """
         <script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>
