@@ -2,14 +2,15 @@
 
 ## Overview
 This app allows users to configure a time table, per device, and schedule the desired state for each configured time. 
-Users can select any number of switches/dimmers, schedule them based on a set time or sunrise/set (with offset), 
-and configure the desired state for that time. Additionally, users can pause the schedule for individual times. 
+Users can select any number of switches/dimmers/buttons, schedule them based on a set time, hub variable or sunrise/set (with offset), 
+and configure the desired state/action for that time. Additionally, users can pause the schedule for individual times. 
 Advanced options include only running for desired modes or when a specific switch is set in addition to the ability 
 to manually pause all schedules.
 
 ## Features
-- Schedule any number of switches/dimmers
+- Schedule any number of switches/dimmers/buttons
 - Schedules based on selected time or sunrise/set with offset
+- Schedules based on Hub Variable time (date, time or datetime)
 - Individual schedules may be paused
 - Set desired state for switch/dimmer to be in at specified time
 - [Optional] Configure which modes to run schedules for
@@ -21,6 +22,13 @@ Add code for parent app and then and child app. Install/create new instance of p
 
 You may also install via Hubitat Package Manager. Search for "Schedule Manager" and follow installation instructions.
 
+The child app requires OAuth in order to edit schedules. You can enable this by opening the Hubitat sidenav and clicking 
+"Apps Code". Find "Schedule Manager (Child App)" and click it. This opens code editor. On the top right, click the 
+three stacked dots to open the menu and select "OAuth" > "Enable OAuth in App". 
+
+If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of each child 
+instance in order for the app to get the new token.
+
 ### Example
 Here we'll walk through the setup of an app
 1. Assign a name
@@ -31,10 +39,10 @@ Here we'll walk through the setup of an app
    - You may click the "Type" of a device to change the capability you're controlling (if there are multiple capabilities)
    - Click the "+" under "Add Run" to add new schedules for a device
    - Configure a static time for a schedule
-   - Or configure a device to run at sunrise/set (with offset)
+   - Or configure a device to run at a Hub Variable time or at sunrise/set (with offset)
    - Check which days the schedule should apply
    - Enable/pause a schedule
-   - Configure the desired state and level of a device
+   - Configure the desired state, level or action of a device
    - You may remove a schedule by clicking the "X" next to a schedule
 
 Advanced Options

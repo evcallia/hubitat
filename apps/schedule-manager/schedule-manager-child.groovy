@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2024-11-25
+ *  Last modified: 2025-08-12
  *
  *  Changelog:
  *
@@ -63,12 +63,22 @@
  *                     - Fix null pointer that happened occasionally when a new device was added
  *  2.0.1 - 2025-04-03 - Fix app version not showing properly
  *  2.0.2 - 2025-04-21 - Fix error when offset is applied to "time" or "date" only Hub Variables
- *
+ *  3.0.0 - 2025-08-12 - BREAKING CHANGE - OAuth required to edit schedules
+ *                     - Schedules will continue to run even if oauth is not enabled
+ *                     - Modernize UI - Better looking table, popup system for inputs
+ *                     - Add ability to manually refresh OAuth token
+ *                     - Add support for button devices - push, doubleTap, hold, release
+ *                     - Refresh schedules when hub restarts
  */
+
+import groovy.json.JsonOutput
+import java.time.format.DateTimeFormatter
+import java.time.LocalDate
+import java.time.ZonedDateTime
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "2.0.1"
+    state.version = "3.0.0"
 }
 
 definition(
@@ -80,7 +90,8 @@ definition(
         category: "Control",
         parent: "evcallia:Schedule Manager",
         iconUrl: "",
-        iconX2Url: ""
+        iconX2Url: "",
+        oauth: true
 )
 preferences { page(name: "mainPage") }
 
@@ -103,13 +114,14 @@ def mainPage() {
 
         section(getFormat("header", "Initial Set-Up"), hideable: true, hidden: hide) {
             input name: "appName", type: "string", title: "<b>Name this App</b>", required: true, submitOnChange: true, width: 3
-            input "devices", "capability.switch, capability.SwitchLevel", title: "<b>Select Devices schedule</b>", required: true, multiple: true, submitOnChange: true, width: 6
+            input "devices", "capability.switch, capability.SwitchLevel, capability.doubleTapableButton, capability.holdableButton, capability.pushableButton, capability.releasableButton", title: "<b>Select Devices</b>", required: true, multiple: true, submitOnChange: true, width: 6
 
             devices.each { dev ->
                 if (!state.devices["$dev.id"]) {
+                    def isButton = dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] } != null
                     state.devices["$dev.id"] = [
                         zone: 0,
-                        capability: "Switch",
+                        capability: dev.capabilities.find { it.name == "SwitchLevel" } ? "Dimmer" : (isButton? "Button" : "Switch"),
                         schedules: [
                             (UUID.randomUUID().toString()): generateDefaultSchedule()
                         ],
@@ -143,56 +155,6 @@ def mainPage() {
                 }
 
                 paragraph displayTable()
-
-
-                //**** Create hidden inputs used to modify values in the table ****//
-
-                // Input Start Time
-                if (state.newStartTime) {
-                    input name: "newStartTime", type: "time", title: getFormat("noticable", "<b>Enter Start/On Time, Applies to all checked days for Switch.<br><small>Uses 24hr time, &nbsp Hit Update</small>"), required: false, submitOnChange: true, width: 5, newLineAfter: true, style: 'margin-left:10px'
-                    if (newStartTime) {
-                        def (deviceId, scheduleId) = state.newStartTime.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].startTime = newStartTime
-                        state.remove("newStartTime")
-                        app.removeSetting("newStartTime")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
-
-                // Sunrise/Sunset or variable offset time
-                if (state.newOffsetTime) {
-                    input name: "newOffsetTime", type: "number", title: getFormat("noticable", "<b>Enter +/- Offset time from Sunrise or Sunset in minutes. Applies to all checked days for Switch.<br><small>EX: 30, -30, or -90, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "-1000 to 1000", range: "-1000..1000", width: 8, newLineAfter: true, style: 'margin-left:10px'
-                    if (newOffsetTime) {
-                        def (deviceId, scheduleId) = state.newOffsetTime.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].offset = newOffsetTime
-                        state.remove("newOffsetTime")
-                        app.removeSetting("newOffsetTime")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
-
-                // Desired Level
-                if (state.desiredLevel) {
-                    input name: "desiredLevel", type: "number", title: getFormat("noticable", "<b>Enter a number between 1-100 for the desired dimmer level. Applies to all checked days for Dimmer.</b><br><small>EX: 1, 50, or 100, &nbsp Hit Enter</small>"), required: false, submitOnChange: true, accepts: "0 to 100", range: "0..100", width: 8, newLineAfter: true, style: 'margin-left:10px'
-                    if (desiredLevel) {
-                        def (deviceId, scheduleId) = state.desiredLevel.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].desiredLevel = desiredLevel
-                        state.remove("desiredLevel")
-                        app.removeSetting("desiredLevel")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
-
-                if (state.selectVariableStartTime) {
-                    input name: "newVariableTime", type: "enum", title: getFormat("noticable", "<b>Select Hub Variable</b>"), options: getHubVariableList(), required: false, submitOnChange: true, width: 8, newLineAfter: true, style: 'margin-left:10px'
-                    if (newVariableTime) {
-                        def (deviceId, scheduleId) = state.selectVariableStartTime.tokenize('|')
-                        state.devices[deviceId].schedules[scheduleId].variableTime = newVariableTime
-                        state.remove("selectVariableStartTime")
-                        app.removeSetting("newVariableTime")
-                        paragraph "<script>{changeSubmit(this)}</script>"
-                    }
-                }
             }
         }
 
@@ -201,6 +163,7 @@ def mainPage() {
 
         section(getFormat("header", "Advanced Options"), hideable: true, hidden: false) {
             input "updateButton", "button", title: "Update/Store schedules without hitting Done"
+            input "refreshOAuthToken", "button", title: "Refresh OAuth Token"
             input name: "modeBool", type: "bool", title: getFormat("important2", "<b>Only run schedules during a selected mode?</b><br><small>Home, Away,.. Applies to all Devices</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (modeBool) {
                 input name: "mode", type: "mode", title: getFormat("important2", "<b>Select mode(s) for schedules to run</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px', multiple: true
@@ -219,22 +182,554 @@ def mainPage() {
 //****  Notes Section ****//
 
         section(getFormat("header", "Usage Notes"), hideable: true, hidden: hide) {
-            paragraph getFormat("lessImportant", "<ul>" +
-                    "<li>Use for any switch, outlet or dimmer. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>" +
-                    "<li>Enter Start time in 24 hour format.</li>" +
-                    "<li>To use Sunset/Sunrise with +/- offset, check box, check sunrise or sunset icon, click number to enter offset.</li>" +
-                    "<li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>" +
-                    "<li>Optional: Select which modes to run schedules for.</li>" +
-                    "<li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>" +
-                    "<li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>" +
-                    "<li>Optional: Select whether you want to pause all schedules.</li>" +
-                    "</ul>")
+            paragraph """
+                <ul>
+                    <li>Use for any switch, outlet or dimmer. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
+                    <li>In order to use this app, you must enable OAuth. This can be done by opening the Hubitat sidenav and clicking 'Apps Code'. Find 'Schedule Manager (Child App)' and click it. This opens code editor. On the top right, click the three stacked dots to open the menu and select 'OAuth' > 'Enable OAuth in App'.</li>
+                    <li>If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of this instance in order for the app to get the new token.</li>
+                    <li>Enter Start time in 24 hour format.</li>
+                    <li>To use Sunset/Sunrise with/- offset, check 'Use Sun Set/Rise' box, check sunrise or sunset icon, click number to enter offset.</li>
+                    <li>To use Hub Variables with/- offset, check 'Use Hub Variable' box, select your variable, click number to enter offset.</li>
+                    <li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>
+                    <li>Optional: Select which modes to run schedules for.</li>
+                    <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>
+                    <li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
+                    <li>Optional: Select whether you want to pause all schedules.</li>
+                </ul>"""
+        }
+
+        section(getFormat("header", "Support")) {
+            paragraph """
+                <ul>
+                    <li>Donations are welcome and appreciated! Support the project using <a href='https://www.paypal.com/donate/?hosted_button_id=P38WNJK735N9N'>PayPal</a> or <a href='https://venmo.com/u/Evan-Callia'>Venmo</a>.</li>
+                    <li><b>Need help?</b> Visit the <a href='https://community.hubitat.com/t/release-schedule-manager-app/145646' target='_blank'>Hubitat Community</a> for support.</li>
+                    <li><b>Found a bug?</b> Please post it on the community thread or report it on the <a href='https://github.com/evcallia/hubitat/tree/main/apps/schedule-manager'>GitHub Repository</a> by opening an issue.</li>
+                </ul>"""
         }
     }
 }
 
+//****  API Routes ****//
+mappings {
+    path("/updateTime") {
+        action: [POST: "updateTime"]
+    }
 
-//****  Main Table ****//
+    path("/updateOffset") {
+        action: [POST: "updateOffset"]
+    }
+
+    path("/updateDesiredLevel") {
+        action: [POST: "updateDesiredLevel"]
+    }
+
+    path("/updateHubVariable") {
+        action: [POST: "updateHubVariable"]
+    }
+
+    path("/getHubVariableOptions") {
+        action: [GET: "getHubVariableOptions"]
+    }
+
+    path("/updateButtonConfig") {
+        action: [POST: "updateButtonConfig"]
+    }
+}
+
+//****  API Route Handlers ****//
+def updateTime() {
+    logDebug "updateTime called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newStartTime = json.startTime
+    def zdt = ZonedDateTime.now().withHour(newStartTime.split(':')[0].toInteger())
+                                .withMinute(newStartTime.split(':')[1].toInteger())
+                                .withSecond(0)
+                                .withNano(0)
+    def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+    state.devices[deviceId].schedules[scheduleId].startTime = zdt.format(formatter)
+}
+
+def updateOffset() {
+    logDebug "updateOffset called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newOffset = json.offset.toInteger()
+    state.devices[deviceId].schedules[scheduleId].offset = newOffset
+    refreshVariables()
+    if (state.devices[deviceId].schedules[scheduleId].useVariableTime) {
+        render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(state.devices[deviceId].schedules[scheduleId].variableTime, state.devices[deviceId].schedules[scheduleId].startTime), offset: newOffset, varType: "hubVariable"])
+    } else {
+        def newStartTime = getTimeFromDateTimeString(state.devices[deviceId].schedules[scheduleId].startTime)
+        render contentType: "application/json", data: JsonOutput.toJson([startTime: newStartTime, offset: newOffset, varType: "sun"])
+    }
+}
+
+def updateDesiredLevel() {
+    logDebug "updateDesiredLevel called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newLevel = json.level.toInteger()
+    state.devices[deviceId].schedules[scheduleId].desiredLevel = newLevel
+}
+
+def updateHubVariable() {
+    logDebug "updateHubVariable called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def newVariable = json.hubVariable
+    state.devices[deviceId].schedules[scheduleId].variableTime = newVariable
+    updateVariableTimes()
+    render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(newVariable, state.devices[deviceId].schedules[scheduleId].startTime)])
+}
+
+def getHubVariableOptions() {
+    logDebug "getHubVariableOptions called"
+    render contentType: "application/json", data: JsonOutput.toJson(getHubVariableList())
+}
+
+def updateButtonConfig() {
+    logDebug "updateButtonConfig called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def buttonNumber = json.buttonNumber?.toInteger()
+    def buttonAction = json.buttonAction
+    if (buttonNumber != null) {
+        state.devices[deviceId].schedules[scheduleId].buttonNumber = buttonNumber
+    }
+    if (buttonAction) {
+        state.devices[deviceId].schedules[scheduleId].buttonAction = buttonAction
+    }
+    render contentType: "application/json", data: JsonOutput.toJson([success: true])
+}
+
+//****  JS for Table  ****//
+String loadCSS() {
+    return """
+        <style>
+            .mdl-data-table {
+                width: 100%;
+                border-collapse: collapse;
+                border: 1px solid #E0E0E0;
+                box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+                border-radius: 4px;
+                overflow: hidden;
+                margin-bottom: 20px;
+            }
+            .mdl-data-table thead {
+                background-color: #F5F5F5;
+            }
+            .mdl-data-table th {
+                font-size: 14px !important;
+                font-weight: 500;
+                color: #424242;
+                padding: 8px !important;
+                text-align: center;
+                border-bottom: 2px solid #E0E0E0;
+                border-right: 1px solid #E0E0E0;
+            }
+            th.prominent-border-right,
+            td.prominent-border-right {
+                border-right: 1px solid gray !important;
+            }
+            td.prominent-border-bottom {
+                border-bottom: 1px solid gray !important;
+            }
+            .mdl-data-table td {
+                font-size: 14px !important;
+                padding: 6px 4px !important;
+                text-align: center;
+                border-bottom: 1px solid #EEEEEE;
+                border-right: 1px solid #EEEEEE;
+            }
+            .mdl-data-table tbody tr:hover {
+                background-color: inherit !important;
+            }
+            .device-section {
+                font-weight: 500;
+            }
+            .device-link a {
+                color: #2196F3;
+                text-decoration: none;
+                font-weight: 500;
+            }
+            .device-link a:hover {
+                text-decoration: underline;
+            }
+            .mdl-cell .mdl-textfield div {
+              white-space: normal !important;
+            }
+
+            /* Popup styles */
+            .popup-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.5);
+                display: none;
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }
+            .popup-container {
+                background-color: #FFFFFF;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                padding: 20px;
+                max-width: 400px;
+                width: 90%;
+                position: relative;
+            }
+            .popup-title {
+                font-size: 18px;
+                font-weight: 500;
+                color: #212121;
+                margin-bottom: 15px;
+                padding-bottom: 10px;
+                border-bottom: 1px solid #EEEEEE;
+            }
+            .popup-content {
+                margin-bottom: 20px;
+            }
+            .popup-buttons {
+                display: flex;
+                justify-content: flex-end;
+                gap: 10px;
+            }
+            .popup-btn {
+                padding: 8px 16px;
+                border-radius: 4px;
+                font-size: 14px;
+                font-weight: 500;
+                cursor: pointer;
+                border: none;
+                outline: none;
+            }
+            .popup-btn-primary {
+                background-color: #2196F3;
+                color: white;
+            }
+            .popup-btn-secondary {
+                background-color: #E0E0E0;
+                color: #424242;
+            }
+            .popup-close {
+                position: absolute;
+                top: 15px;
+                right: 15px;
+                font-size: 20px;
+                cursor: pointer;
+                color: #9E9E9E;
+            }
+            .popup-input {
+                width: 100%;
+                padding: 10px;
+                border-radius: 4px;
+                border: 1px solid #E0E0E0;
+                font-size: 14px;
+                margin-bottom: 10px;
+            }
+            .popup-label {
+                display: block;
+                font-size: 14px;
+                color: #616161;
+                margin-bottom: 5px;
+            }
+        </style>
+    """
+}
+
+//****  CSS for Table  ****//
+String loadScript() {
+    return """
+        <script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>
+        <script>
+            // Remove some extra whitespace around Hubitat 'paragraph'
+            document.querySelectorAll('.mdl-cell.mdl-textfield > div').forEach(el => {
+                el.style.removeProperty('white-space');
+            });
+
+            // Popup system
+            function showPopup(title, content, submitCallback) {
+                // Create popup elements
+                const overlay = document.createElement('div');
+                overlay.className = 'popup-overlay';
+
+                const container = document.createElement('div');
+                container.className = 'popup-container';
+
+                const closeBtn = document.createElement('div');
+                closeBtn.className = 'popup-close';
+                closeBtn.innerHTML = '&times;';
+                closeBtn.onclick = hidePopup;
+
+                const titleEl = document.createElement('div');
+                titleEl.className = 'popup-title';
+                titleEl.innerText = title;
+
+                const contentEl = document.createElement('div');
+                contentEl.className = 'popup-content';
+                contentEl.innerHTML = content;
+
+                const buttonsEl = document.createElement('div');
+                buttonsEl.className = 'popup-buttons';
+
+                const cancelBtn = document.createElement('button');
+                cancelBtn.className = 'popup-btn popup-btn-secondary';
+                cancelBtn.innerText = 'Cancel';
+                cancelBtn.onclick = hidePopup;
+
+                const submitBtn = document.createElement('button');
+                submitBtn.className = 'popup-btn popup-btn-primary';
+                submitBtn.innerText = 'Submit';
+                submitBtn.onclick = function() {
+                    submitCallback(overlay);
+                };
+
+                // Build popup structure
+                buttonsEl.appendChild(cancelBtn);
+                buttonsEl.appendChild(submitBtn);
+
+                container.appendChild(closeBtn);
+                container.appendChild(titleEl);
+                container.appendChild(contentEl);
+                container.appendChild(buttonsEl);
+
+                overlay.appendChild(container);
+
+                // Add to document and show
+                document.body.appendChild(overlay);
+                setTimeout(() => {
+                    overlay.style.display = 'flex';
+                    // Focus the first input if exists
+                    const firstInput = overlay.querySelector('input, select');
+                    if (firstInput) firstInput.focus();
+                }, 10);
+
+                return overlay;
+            }
+
+            function hidePopup() {
+                const overlays = document.querySelectorAll('.popup-overlay');
+                overlays.forEach(overlay => {
+                    overlay.style.display = 'none';
+                    setTimeout(() => {
+                        overlay.remove();
+                    }, 300);
+                });
+            }
+
+            // Time input popup
+            function editStartTimePopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter Desired Time</label>
+                    <input type="time" class="popup-input" id="timeInput" value="\${currentValue || ''}">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Applies to all checked days for this device.</p>
+                `;
+
+                showPopup("Set Schedule Time", content, (popup) => {
+                    const input = popup.querySelector('#timeInput');
+                    if (input.value) {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateTime?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            startTime: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId).innerHTML = timeInput.value;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Offset input popup
+            function newOffsetPopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter +/- Offset time (in minutes)</label>
+                    <input type="number" class="popup-input" id="offsetInput" value="\${currentValue || '0'}">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Examples: 30, -30, or -90. Applied to Sunrise/Sunset or Hub Variable time.</p>
+                `;
+
+                showPopup("Set Time Offset", content, (popup) => {
+                    const input = popup.querySelector('#offsetInput');
+                    if (input.value !== '') {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateOffset?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            offset: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                const jsonResponse = JSON.parse(xhr.responseText);
+                                const newStartTime = jsonResponse.startTime;
+                                const varType = jsonResponse.varType;
+
+                                var idPrefix = ""
+                                if (varType === "hubVariable") {
+                                    idPrefix = "selectVariableStartTime|";
+                                } else {
+                                    idPrefix = "editStartTime|";
+                                }
+
+                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId).innerHTML = input.value;
+                                document.getElementById(idPrefix + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Dimmer level popup
+            function desiredLevelPopup(deviceId, scheduleId, currentValue) {
+                const content = `
+                    <label class="popup-label">Enter Dimmer Level (1-100)</label>
+                    <input type="number" class="popup-input" id="levelInput" value="\${currentValue || '100'}" min="0" max="100">
+                    <p style="font-size:12px;color:#757575;margin-top:5px;">Set the desired brightness level when the device turns on.</p>
+                `;
+
+                showPopup("Set Dimmer Level", content, (popup) => {
+                    const input = popup.querySelector('#levelInput');
+                    if (input.value !== '' && input.value >= 0 && input.value <= 100) {
+                        // Send request to hubitat app api to handle state change
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', '/apps/api/${app.id}/updateDesiredLevel?access_token=${state.accessToken}', true);
+                        xhr.setRequestHeader('Content-Type', 'application/json');
+
+                        var data = JSON.stringify({
+                            deviceId: deviceId,
+                            scheduleId: scheduleId,
+                            level: input.value
+                        });
+
+                        xhr.onreadystatechange = function() {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                // When successful, update the input field in the table so we don't need to page refresh
+                                document.getElementById("desiredLevel|" + deviceId + "|" + scheduleId).innerHTML = input.value;
+                            }
+                        };
+
+                        xhr.send(data);
+                    }
+                    hidePopup();
+                });
+            }
+
+            // Hub Variable popup
+            function selectVariableStartTimePopup(deviceId, scheduleId, currentValue) {
+                const fetchOptions = () => {
+                    return fetch('/apps/api/${app.id}/getHubVariableOptions?access_token=${state.accessToken}')
+                        .then(response => response.json())
+                        .catch(error => {
+                            console.error('Error fetching variable options:', error);
+                            return {};
+                        });
+                };
+
+                fetchOptions().then(options => {
+                    console.log("fetched options: " + options)
+                    // Create a select dropdown from the options
+                    let optionsHtml = '<label class="popup-label">Select Hub Variable</label>';
+                    optionsHtml += '<select class="popup-input" id="variableSelect">';
+
+                    // Add options from the server
+                    for (const [key, value] of Object.entries(options)) {
+                        const selected = currentValue === key ? 'selected' : '';
+                        optionsHtml += '<option value="' + key + '" ' + selected + '>' + value + '</option>';
+                    }
+
+                    optionsHtml += '</select>';
+                    optionsHtml += '<p style="font-size:12px;color:#757575;margin-top:5px;">Select a Hub Variable to use as the schedule time.</p>';
+
+                    showPopup("Select Hub Variable", optionsHtml, (popup) => {
+                        const input = popup.querySelector('#variableSelect');
+                        if (input.value) {
+                            // Send request to hubitat app api to handle state change
+                            var xhr = new XMLHttpRequest();
+                            xhr.open('POST', '/apps/api/${app.id}/updateHubVariable?access_token=${state.accessToken}', true);
+                            xhr.setRequestHeader('Content-Type', 'application/json');
+
+                            var data = JSON.stringify({
+                                deviceId: deviceId,
+                                scheduleId: scheduleId,
+                                hubVariable: input.value
+                            });
+
+                            xhr.onreadystatechange = function() {
+                                if (xhr.readyState === 4 && xhr.status === 200) {
+                                    // When successful, update the input field in the table so we don't need to page refresh
+                                    const jsonResponse = JSON.parse(xhr.responseText);
+                                    const newStartTime = jsonResponse.startTime;
+
+                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                                }
+                            };
+
+                            xhr.send(data);
+                        }
+                        hidePopup();
+                    });
+                });
+            }
+
+            // Button number change
+            function buttonNumberChange(deviceId, scheduleId, value) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/apps/api/${app.id}/updateButtonConfig?access_token=${state.accessToken}', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                var data = JSON.stringify({
+                    deviceId: deviceId,
+                    scheduleId: scheduleId,
+                    buttonNumber: value
+                });
+                xhr.send(data);
+            }
+
+            // Button action change
+            function buttonActionChange(deviceId, scheduleId, value) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/apps/api/${app.id}/updateButtonConfig?access_token=${state.accessToken}', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                var data = JSON.stringify({
+                    deviceId: deviceId,
+                    scheduleId: scheduleId,
+                    buttonAction: value
+                });
+                xhr.send(data);
+            }
+        </script>
+    """
+}
+
+//****  Main Table  ****//
 
 String displayTable() {
     // Sunday - Saturday Check Boxes
@@ -342,10 +837,6 @@ String displayTable() {
     // Variable time
     if (state.useVariableTimeChecked) {
         def (deviceId, scheduleId) = state.useVariableTimeChecked.tokenize('|')
-        logDebug "deviceId $deviceId; scheduleId: $scheduleId"
-        logDebug "state.devices[deviceId]: ${state.devices[deviceId]}"
-        logDebug "state.devices[deviceId].schedules: ${state.devices[deviceId].schedules}"
-        logDebug "state.devices[deviceId].schedules[scheduleId]: ${state.devices[deviceId].schedules[scheduleId]}"
         state.devices[deviceId].schedules[scheduleId].useVariableTime = true
         state.remove("useVariableTimeChecked")
     } else if (state.useVariableTimeUnChecked) {
@@ -394,6 +885,12 @@ String displayTable() {
         state.remove("setCapabilitySwitch")
     }
 
+    if (state.setCapabilityButton) {
+        def deviceId = state.setCapabilityButton
+        state.devices[deviceId].capability = "Button"
+        state.remove("setCapabilityButton")
+    }
+
     // Desired State
     if (state.desiredState) {
         def (deviceId, scheduleId) = state.desiredState.tokenize('|')
@@ -406,26 +903,32 @@ String displayTable() {
         state.remove("desiredState")
     }
 
-    // Table Header Build
-    String str = "<script src='https://code.iconify.design/iconify-icon/1.0.0/iconify-icon.min.js'></script>"
-    str += "<style>.mdl-data-table tbody tr:hover{background-color:inherit} .tstat-col td, .tstat-col th {font-size:15px !important; padding:2px 4px;text-align:center} + .tstat-col td {font-size:13px  }" +
-            "</style><div style='overflow-x:auto'><table class='mdl-data-table tstat-col' style=';border:3px solid black'>" +
-            "<thead><tr style='border-bottom:2px solid black'><th>#</th>" +
-            "<th>Device</th>" +
-            "<th>Current<br>State</th>" +
-            "<th>Type</th>" +
-            "<th style='border-right:2px solid black'>Add<br>Run</th>" +
-            "<th style='width: 60px !important'>Run<br>Time</th>" +
-            "<th>Use Hub<br>Variable?</th>" +
-            "<th>Use Sun<br>Set/Rise?</th>" +
-            "<th>Rise or<br>Set?</th>" +
-            "<th>Offset<br>+/-Min</th>" +
-            "<th>Sun</th>" + "<th>Mon</th>" + "<th>Tue</th>" + "<th>Wed</th>" + "<th>Thu</th>" + "<th>Fri</th>" + "<th>Sat</th>" +
-            "<th>Pause<br>Schedule</th>" +
-            "<th>Desired<br>State</th>" +
-            "<th style='border-right:2px solid black'>Desired<br>Level</th>" +
-            "<th style='border-right:2px solid black'>Remove<br>Run</th>" +
-            "</tr></thead>"
+    // Configure table
+    String str = loadCSS() + loadScript() + """
+        <div style='overflow-x:auto'><table class='mdl-data-table'>
+        <thead><tr><th>#</th>
+        <th>Device</th>
+        <th>Current<br>State</th>
+        <th>Type</th>
+        <th class='prominent-border-right'>Add<br>Run</th>
+        <th style='width: 60px !important'>Run<br>Time</th>
+        <th>Use Hub<br>Variable?</th>
+        <th>Use Sun<br>Set/Rise?</th>
+        <th>Rise or<br>Set?</th>
+        <th>Offset<br>+/-Min</th>
+        <th>Sun</th>
+        <th>Mon</th>
+        <th>Tue</th>
+        <th>Wed</th>
+        <th>Thu</th>
+        <th>Fri</th>
+        <th>Sat</th>
+        <th>Pause<br>Schedule</th>
+        <th>Desired<br>State</th>
+        <th class='prominent-border-right'>Desired<br>Level</th>
+        <th>Remove<br>Run</th>
+        </tr></thead>
+    """
 
     int zone = 0
     devices.sort { it.displayName.toLowerCase() }.each { dev ->
@@ -433,33 +936,50 @@ String displayTable() {
 
         //**** Setup 'Device' Section of Table ****//
 
-        String deviceLink = "<a href='/device/edit/$dev.id' target='_blank' title='Open Device Page for $dev'>$dev"
-        String addNewRunButton = buttonLink("addNew|$dev.id", "+", "green", "23px")
+        String deviceLink = "<a href='/device/edit/$dev.id' target='_blank' title='Open Device Page for $dev'>$dev</a>"
+        String addNewRunButton = buttonLink("addNew|$dev.id", "<iconify-icon icon='material-symbols:add-circle-outline-rounded'></iconify-icon>", "#4CAF50", "24px")
         int thisZone = state.devices["$dev.id"].zone = zone
         int scheduleCount = state.devices["$dev.id"].schedules.size()
-        boolean deviceIsDimmer = dev.capabilities.find { it.name == "SwitchLevel" } != null
 
-        str += "<trstyle='color:black'><td rowspan='$scheduleCount'>$thisZone</td>" +
-                "<td rowspan='$scheduleCount'>$deviceLink</td>"
+        def prominentBorderBottom = (zone != devices.size()) ? "class='prominent-border-bottom'" : ""
+        str += "<tr class='device-section'>" +
+                   "<td $prominentBorderBottom rowspan='$scheduleCount'>$thisZone</td>" +
+                   "<td $prominentBorderBottom rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
 
         if (dev.currentSwitch) {
-            str += "<td rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "green" : "red"};font-weight:bold;font-size:23px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "#4CAF50" : "#F44336"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
         } else if (dev.currentValve) {
-            str += "<td rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "green" : "red"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
-        }
-
-        if (deviceIsDimmer) {
-            String typeButton = (state.devices["$dev.id"].capability == "Switch") ? buttonLink("setCapabilityDimmer|$dev.id", "Switch", "MediumBlue") : buttonLink("setCapabilitySwitch|$dev.id", "Dimmer", "MediumBlue")
-            str += "<td rowspan='$scheduleCount' style='font-weight:bold' title='Capability: Dimmer'>$typeButton</td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "#4CAF50" : "#F44336"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         } else {
-            str += "<td rowspan='$scheduleCount' title='Capability: Switch'>Switch</td>"
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount'></td>"
         }
 
-        str += "<td rowspan='$scheduleCount' style='border-right:2px solid black' title='Click to add new time for this device'>$addNewRunButton</td>"
+        def supportedCapabilities = []
+        if (dev.capabilities.find { it.name == "SwitchLevel" }) {
+            supportedCapabilities.add("Dimmer")
+        }
+        if (dev.capabilities.find { it.name == "Switch" }) {
+            supportedCapabilities.add("Switch")
+        }
+        if (dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] }) {
+            supportedCapabilities.add("Button")
+        }
 
-        //**** Update sunrise/set times and order schedules ****//
-        updateSunriseAndSet()
+        if (supportedCapabilities.size() > 1) {
+            int nextIndex = (supportedCapabilities.indexOf(state.devices["$dev.id"].capability) + 1) % supportedCapabilities.size()
+            def capabilityButton = buttonLink("setCapability${supportedCapabilities[nextIndex]}|${dev.id}", state.devices[dev.id].capability, "#2196F3")
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices["$dev.id"].capability}'>$capabilityButton</td>"
+        } else {
+            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices["$dev.id"].capability}'>${state.devices["$dev.id"].capability}</td>"
+        }
 
+        def prominentBorders = (zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+        str += "<td $prominentBorders rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
+
+        //**** Update sunrise/set & hub variable times ****//
+        refreshVariables()
+
+        // order schedules so table is sorted by time
         def sortedSchedules = state.devices["$dev.id"].schedules.sort { a, b ->
             try {
                 def parseDateTime = { dateStr ->
@@ -469,13 +989,15 @@ String displayTable() {
 
                     try {
                         // Try ISO format first
+                        def todayDateString = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+                        dateStr = dateStr.replace("yyyy-mm-dd", todayDateString).replace("9999-99-99", todayDateString).replace("sss-zzzz", "000-0000")
                         return new Date().parse("yyyy-MM-dd'T'HH:mm:ss.SSSZ", dateStr)
                     } catch (Exception e1) {
                         try {
                             // Try the other format
                             return new Date().parse("EEE MMM dd HH:mm:ss zzz yyyy", dateStr)
                         } catch (Exception e2) {
-                            logError "Failed to parse date: ${dateStr}"
+                            logError "Failed to parse date: ${dateStr}. Exception 1: ${e1.message}, Exception 2: ${e2.message}"
                             return null
                         }
                     }
@@ -497,7 +1019,9 @@ String displayTable() {
 
         //**** Iterate each schedule, configuring the 'schedule' section of the table ****//
 
+        def num_schedules = state.devices["$dev.id"].schedules.size()
         sortedSchedules.each { scheduleId, schedule ->
+            num_schedules = num_schedules - 1
             String thisStartTime = getTimeFromDateTimeString(schedule.startTime)
             String thisOffsetTime = schedule.offset
             String deviceAndScheduleId = "${dev.id}|$scheduleId"
@@ -508,21 +1032,9 @@ String displayTable() {
                 if (schedule.variableTime) {
                     def variableValue = getValueForHubVariable(schedule.variableTime)
                     if (variableValue == null) {
-                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select<br>Variable", "MediumBlue")
+                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select Variable", "MediumBlue")
                     } else {
-                        def dtString = ""
-                        def date = getDateFromDateTimeString(schedule.startTime)
-                        if (!date.equals("9999-99-99")) {
-                            dtString += "$date"
-                        }
-                        def time = getTimeFromDateTimeString(schedule.startTime)
-                        if (!time.equals("99:99")) {
-                            if (dtString.length() > 0) {
-                                dtString += "<br>"
-                            }
-                            dtString += time
-                        }
-                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "${schedule.variableTime}<br>($dtString)", "MediumBlue")
+                        startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", formatHubVariableNameWithTime(schedule.variableTime, schedule.startTime), "MediumBlue")
                     }
                 } else {
                     startTime = buttonLink("selectVariableStartTime|$deviceAndScheduleId", "Select<br>Variable", "MediumBlue")
@@ -547,47 +1059,73 @@ String displayTable() {
             String desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
-            if (schedule.sunTime) {
-                str += "<td title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
-                        "<td>Using Sun<br>Time</td>"
-            } else if (schedule.useVariableTime){
-                str += "<td title='Select Hub Variable'>$startTime</td>" +
-                        "<td title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+            // Handle button device specifics
+            if (state.devices["$dev.id"].capability == "Button") {
+                if (schedule.buttonNumber == null) {
+                    schedule.buttonNumber = 1 // Default to button 1 if not set
+                }
+
+                // For button devices, show button config instead of desired state
+                def buttonCount = dev.currentValue("numberOfButtons") ?: 1
+                def buttonNum = schedule.buttonNumber ?: 1
+                def buttonOptions = (1..buttonCount).collect { n -> "<option value='${n}' ${n==buttonNum?'selected':''}>button ${n}</option>" }.join('')
+                def buttonSelect = "<select id='buttonNumber|${deviceAndScheduleId}' onchange=\"buttonNumberChange('${dev.id}','${scheduleId}',this.value)\">${buttonOptions}</select>"
+
+                def actions = dev.getSupportedCommands()?.collect { it.toString() }.intersect(["doubleTap", "hold", "push", "release"]) ?: ["No commands found"]
+                def actionVal = schedule.buttonAction ?: actions[0]
+                def actionOptions = actions.collect { a -> "<option value='${a}' ${a==actionVal?'selected':''}>${a}</option>" }.join('')
+                def actionSelect = "<select id='buttonAction|${deviceAndScheduleId}' onchange=\"buttonActionChange('${dev.id}','${scheduleId}',this.value)\">${actionOptions}</select>"
+                
+                desiredStateButton = "${actionSelect}<br>${buttonSelect}"
+                desiredLevelButton = ""
             } else {
-                str += "<td style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
-                        "<td title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+                desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
+                desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
+            }
+
+            def td_border_bottom = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
+            if (schedule.sunTime) {
+                str += "<td $td_border_bottom id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
+                        "<td $td_border_bottom>Using Sun<br>Time</td>"
+            } else if (schedule.useVariableTime){
+                str += "<td $td_border_bottom title='Select Hub Variable'>$startTime</td>" +
+                        "<td $td_border_bottom title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+            } else {
+                str += "<td $td_border_bottom style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
+                        "<td $td_border_bottom title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             }
 
             if (schedule.useVariableTime) {
-                str += "<td colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
-                       "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                str += "<td $td_border_bottom colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                       "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
             } else {
-                str += "<td title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
+                str += "<td $td_border_bottom title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
                 if (schedule.sunTime) {
-                    str += "<td title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
-                            "<td style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                    str += "<td $td_border_bottom title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
+                            "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
                 } else {
-                    str += "<td colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                    str += "<td $td_border_bottom colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
                 }
             }
 
-            str += "<td title='Check Box to select Day'>$sunCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$monCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$tueCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$wedCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$thuCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$friCheckBoxT</td>" +
-                    "<td title='Check Box to select Day'>$satCheckBoxT</td>" +
-                    "<td title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
-                    "<td title='Click to change desired state'>$desiredStateButton</td>"
+            str += "<td $td_border_bottom title='Check Box to select Day'>$sunCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$monCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$tueCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$wedCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$thuCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$friCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to select Day'>$satCheckBoxT</td>" +
+                    "<td $td_border_bottom title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
+                    "<td $td_border_bottom title='${state.devices["$dev.id"].capability == "Button" ? "Button Configuration" : "Click to change desired state"}'>$desiredStateButton</td>"
 
-            if (state.devices["$dev.id"].capability == "Switch" || schedule.desiredState == "off") {
-                str += "<td style='border-right:2px solid black'></td>"
+            def td_borders = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+            if (state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off")) {
+                str += "<td $td_borders></td>"
             } else {
-                str += "<td style='border-right:2px solid black; font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
+                str += "<td $td_borders style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
             }
 
-            str += "<td title='Click to remove run'>$removeRunButton</td></tr>"
+            str += "<td $td_border_bottom title='Click to remove run'>$removeRunButton</td></tr>"
         }
     }
     str += "</table></div>"
@@ -625,7 +1163,14 @@ void switchHandler(data) {
 
                 if (validDate) {
                     logDebug "switchHandler - Device: $device; schedule: $schedule"
-                    if (schedule.desiredState == "on") {
+                    if (deviceConfig.capability == "Button") {
+                        if (schedule.buttonNumber && schedule.buttonAction && schedule.buttonAction != "No commands found") {
+                            device."$schedule.buttonAction"(schedule.buttonNumber)
+                            logDebug "$device $schedule.buttonAction $schedule.buttonNumber triggered"
+                        } else {
+                            logError "Cannot perform action \"${schedule.buttonAction}\" on button \"${schedule.buttonNumber}\""
+                        }
+                    } else if (schedule.desiredState == "on") {
                         if (deviceConfig.capability == "Dimmer") {
                             if (activateOnBeforeLevelBool) {
                                 device.on()
@@ -670,6 +1215,7 @@ def logsOff() {
 
 void appButtonHandler(btn) {
     if (btn == "updateButton") updated()
+    if (btn == "refreshOAuthToken") createAccessToken()
     else if (btn.startsWith("sunUnChecked|")) state.sunUnCheckedBox = btn.minus("sunUnChecked|")
     else if (btn.startsWith("sunChecked|")) state.sunCheckedBox = btn.minus("sunChecked|")
     else if (btn.startsWith("monUnChecked|")) state.monUnCheckedBox = btn.minus("monUnChecked|")
@@ -691,16 +1237,14 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("sunTimeChecked|")) state.sunTimeCheckedBox = btn.minus("sunTimeChecked|")
     else if (btn.startsWith("sunsetUnChecked|")) state.sunsetUnCheckedBox = btn.minus("sunsetUnChecked|")
     else if (btn.startsWith("sunsetChecked|")) state.sunsetCheckedBox = btn.minus("sunsetChecked|")
-    else if (btn.startsWith("newOffset|")) state.newOffsetTime = btn.minus("newOffset|")
     else if (btn.startsWith("addNew|")) state.addRunTime = btn.minus("addNew|")
     else if (btn.startsWith("removeRunTime|")) state.removeRunTime = btn.minus("removeRunTime|")
     else if (btn.startsWith("setCapabilityDimmer|")) state.setCapabilityDimmer = btn.minus("setCapabilityDimmer|")
     else if (btn.startsWith("setCapabilitySwitch|")) state.setCapabilitySwitch = btn.minus("setCapabilitySwitch|")
+    else if (btn.startsWith("setCapabilityButton|")) state.setCapabilityButton = btn.minus("setCapabilityButton|")
     else if (btn.startsWith("desiredState|")) state.desiredState = btn.minus("desiredState|")
-    else if (btn.startsWith("desiredLevel|")) state.desiredLevel = btn.minus("desiredLevel|")
     else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
     else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
-    else if (btn.startsWith("selectVariableStartTime|")) state.selectVariableStartTime = btn.minus("selectVariableStartTime|")
 }
 
 
@@ -710,6 +1254,7 @@ def updateSunriseAndSet() {
     devices.each { dev ->
         state.devices["$dev.id"].schedules.each { scheduleId, schedule ->
             if (schedule.sunTime) {
+                logDebug "Updating Sunrise/Sunset for Device: $dev; Schedule: $scheduleId, Offset: ${schedule.offset}"
                 def offsetRiseAndSet = getSunriseAndSunset(sunriseOffset: schedule.offset, sunsetOffset: schedule.offset)
                 if (schedule.sunset) {
                     schedule.startTime = offsetRiseAndSet.sunset.toString()
@@ -736,14 +1281,17 @@ def updateVariableTimes() {
                     def startTime = varTime.value.replace("99:99:99.999-9999", "00:00:00.000" + new Date().format("XX"))
                     if (schedule.offset && schedule.offset != 0) {
                         dateStr = getDateFromDateTimeString(startTime)
-                        def date = new Date().parse("yyyy-MM-dd'T'HH:mm:ss.sssXX", startTime)
-                        date = new Date(date.getTime() + (schedule.offset * 60 * 1000L)) // convert from minutes to seconds to milliseconds
+                        def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+                        def date = ZonedDateTime.parse(startTime.replace("9999-99-99", "2000-01-01"), formatter) // Random date substitute, doesn't matter
+                        date = date.plusMinutes(schedule.offset)
 
                         if (dateStr.equals("9999-99-99")) {
                             // When adding offsets for time only vars, it messes up the default 9999-99-99 format so we need to reformat it that way
-                            startTime = date.format("'9999-99-99T'HH:mm:ss.sssXX")
+                            formatter = DateTimeFormatter.ofPattern("'9999-99-99T'HH:mm:ss.SSSXX")
+                            startTime = date.format(formatter)
                         } else {
-                            startTime = date.format("yyyy-MM-dd'T'HH:mm:ss.sssXX")
+                            formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXX")
+                            startTime = date.format(formatter)
                         }
                     }
                     schedule.startTime = startTime
@@ -783,6 +1331,11 @@ def buildCron() {
     }
 }
 
+private handleHubBootUp(evt) {
+    logDebug "handleHubBootUp called"
+    updated()
+}
+
 private getHubVariableList() {
     def variables = [:]
 
@@ -802,6 +1355,22 @@ private getValueForHubVariable(name) {
     return null
 }
 
+private formatHubVariableNameWithTime(hubVariable, startTime) {
+    def dtString = ""
+    def date = getDateFromDateTimeString(startTime)
+    if (!date.equals("9999-99-99")) {
+        dtString += "$date"
+    }
+    def time = getTimeFromDateTimeString(startTime)
+    if (!time.equals("99:99")) {
+        if (dtString.length() > 0) {
+            dtString += "<br>"
+        }
+        dtString += time
+    }
+    return "$hubVariable<br>($dtString)"
+}
+
 private getTimeFromDateTimeString(dt) {
     return dt.substring(11, dt.length() - 12)
 }
@@ -812,18 +1381,22 @@ private getDateFromDateTimeString(dt) {
 
 // Formating function for consistency and ease of changing style
 def getFormat(type, myText = "") {
-    if (type == "title") return "<h3 style='color:SteelBlue; font-weight: bold'>${myText}</h3>"  // Steel-Blue
-    if (type == "blueRegular") return "<div style='color:SteelBlue; font-weight: bold'>${myText}</div>"  // Steel-Blue
-    if (type == "noticable") return "<div style='color:#CC5500'>${myText}</div>"  // Burnt-Orange
-    if (type == "important") return "<div style='color:#32a4be'>${myText}</div>"  // Flat Tourquise
-    if (type == "lessImportant") return "<div style='color:green'>${myText}</div>" // Green
-    if (type == "header") return "<div style='color:#000000;font-weight: bold'>${myText}</div>"  // Black
-    if (type == "important2") return "<div style='color:#000000'>${myText}</div>"   // Black
+    if (type == "title") return "<h3 style='color:#2196F3; font-weight: bold; margin-bottom: 15px;'>${myText}</h3>"
+    if (type == "blueRegular") return "<div style='color:#2196F3; font-weight: bold; font-size: 16px; padding: 5px 0;'>${myText}</div>"
+    if (type == "noticable") return "<div style='color:#FF5722; font-weight: 500; padding: 3px 0;'>${myText}</div>"
+    if (type == "important") return "<div style='color:#00BCD4; font-weight: 500; padding: 3px 0;'>${myText}</div>"
+    if (type == "lessImportant") return "<div style='color:#4CAF50; font-weight: normal; padding: 3px 0;'>${myText}</div>"
+    if (type == "header") return "<div style='color:#212121; font-weight: bold; font-size: 16px; margin-top: 15px; margin-bottom: 5px;'>${myText}</div>"
+    if (type == "important2") return "<div style='color:#424242; font-weight: normal;'>${myText}</div>"
 }
 
 // Helper to generate & format a button
-String buttonLink(String btnName, String linkText, color = SteelBlue, font = "15px") {
-    "<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"
+String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15px") {
+    def (action, deviceId, scheduleId) = btnName.tokenize('|')
+    if (["editStartTime", "newOffset", "desiredLevel", "selectVariableStartTime"].contains(action)) {
+        return """<button type="button" name="${btnName}" id="${btnName}" title="Button" onClick='${action}Popup("${deviceId}", "${scheduleId}", "${linkText}")' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block;background:none;border:none'>${linkText}</button>"""
+    }
+    return """<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"""
 }
 
 // Generate a new, empty schedule
@@ -846,7 +1419,9 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             desiredState: "on",
             desiredLevel: 100,
             useVariableTime: false,
-            variableTime: null
+            variableTime: null,
+            buttonNumber: null,
+            buttonAction: null
     ]
 }
 
@@ -878,6 +1453,8 @@ void logError(msg) {
 
 void initialize() {
     logDebug "initialize() called"
+
+    subscribe(location, "systemStart", handleHubBootUp)
 
     if (logEnableBool) runIn(3600, logsOff)  // Disable all Logging after time elapsed
 
@@ -940,6 +1517,9 @@ def updated() {  // runs every 'Done' on already installed app
     refreshVariables()
     buildCron()  // build schedules
     initialize()  // set schedules and subscribes
+    if (!state.accessToken) {
+        createAccessToken()
+    }
 }
 
 def installed() {  // only runs once for new app 'Done' or first time open

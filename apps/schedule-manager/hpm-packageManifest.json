@@ -1,7 +1,8 @@
 {
   "packageName": "Schedule Manager",
   "author": "Evan Callia",
-  "version": "2.0.2",
+  "version": "3.0.0",
+  "releaseNotes": "BREAKING CHANGE - OAuth required to edit schedules (See 'Usage Notes' in app)\n- Schedules will continue to run even if oauth is not enabled\n- Modernize UI - Better looking table, popup system for inputs\n- Support buttons\n- Handle hub restarts",
   "minimumHEVersion": "0.0.0",
   "dateReleased": "2024-11-18",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
@@ -23,7 +24,7 @@
       "namespace": "evcallia",
       "location": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/apps/schedule-manager/schedule-manager-child.groovy",
       "required": true,
-      "oauth": false,
+      "oauth": true,
       "primary": false
     }
   ]
