@@ -199,6 +199,7 @@ def mainPage() {
                     <li>Optional: Select which modes to run schedules for.</li>
                     <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>
                     <li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
+                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
                     <li>Optional: Select whether you want to pause all schedules.</li>
                 </ul>"""
         }
