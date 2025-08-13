@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-08-12
+ *  Last modified: 2025-08-13
  *
  *  Changelog:
  *
@@ -69,16 +69,19 @@
  *                     - Add ability to manually refresh OAuth token
  *                     - Add support for button devices - push, doubleTap, hold, release
  *                     - Refresh schedules when hub restarts
+ *  3.1.0 - 2025-08-13 - Advanced option to restore device state to most recent schedule after hub reboot
+                       - Advanced option to manually restore device state to most recent schedule
  */
 
 import groovy.json.JsonOutput
 import java.time.format.DateTimeFormatter
 import java.time.LocalDate
 import java.time.ZonedDateTime
+import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.0.0"
+    state.version = "3.1.0"
 }
 
 definition(
@@ -164,6 +167,7 @@ def mainPage() {
         section(getFormat("header", "Advanced Options"), hideable: true, hidden: false) {
             input "updateButton", "button", title: "Update/Store schedules without hitting Done"
             input "refreshOAuthToken", "button", title: "Refresh OAuth Token"
+            input "restoreStateButton", "button", title: "Restore state of all devices to most recent schedule"
             input name: "modeBool", type: "bool", title: getFormat("important2", "<b>Only run schedules during a selected mode?</b><br><small>Home, Away,.. Applies to all Devices</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (modeBool) {
                 input name: "mode", type: "mode", title: getFormat("important2", "<b>Select mode(s) for schedules to run</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px', multiple: true
@@ -174,6 +178,7 @@ def mainPage() {
                 input name: "activationSwitchOnOff", type: "enum", title: getFormat("important2", "on or off?"), submitOnChange: true, style: 'margin-left:70px', multiple: false, required: true, options: ["on", "off"]
             }
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
             input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Shuts off in 1hr</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
         }
@@ -194,6 +199,7 @@ def mainPage() {
                     <li>Optional: Select which modes to run schedules for.</li>
                     <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>
                     <li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
+                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
                     <li>Optional: Select whether you want to pause all schedules.</li>
                 </ul>"""
         }
@@ -982,27 +988,6 @@ String displayTable() {
         // order schedules so table is sorted by time
         def sortedSchedules = state.devices["$dev.id"].schedules.sort { a, b ->
             try {
-                def parseDateTime = { dateStr ->
-                    if (dateStr == "00000000000Select000000000000") {
-                        return null
-                    }
-
-                    try {
-                        // Try ISO format first
-                        def todayDateString = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
-                        dateStr = dateStr.replace("yyyy-mm-dd", todayDateString).replace("9999-99-99", todayDateString).replace("sss-zzzz", "000-0000")
-                        return new Date().parse("yyyy-MM-dd'T'HH:mm:ss.SSSZ", dateStr)
-                    } catch (Exception e1) {
-                        try {
-                            // Try the other format
-                            return new Date().parse("EEE MMM dd HH:mm:ss zzz yyyy", dateStr)
-                        } catch (Exception e2) {
-                            logError "Failed to parse date: ${dateStr}. Exception 1: ${e1.message}, Exception 2: ${e2.message}"
-                            return null
-                        }
-                    }
-                }
-
                 def dateA = parseDateTime(a.value.startTime)
                 def dateB = parseDateTime(b.value.startTime)
                 if (dateA && dateB) {
@@ -1216,6 +1201,7 @@ def logsOff() {
 void appButtonHandler(btn) {
     if (btn == "updateButton") updated()
     if (btn == "refreshOAuthToken") createAccessToken()
+    if (btn == "restoreStateButton") restoreState(true)
     else if (btn.startsWith("sunUnChecked|")) state.sunUnCheckedBox = btn.minus("sunUnChecked|")
     else if (btn.startsWith("sunChecked|")) state.sunCheckedBox = btn.minus("sunChecked|")
     else if (btn.startsWith("monUnChecked|")) state.monUnCheckedBox = btn.minus("monUnChecked|")
@@ -1331,9 +1317,131 @@ def buildCron() {
     }
 }
 
-private handleHubBootUp(evt) {
+
+def handleHubBootUp(evt) {
     logDebug "handleHubBootUp called"
     updated()
+
+    // Check advanced config to see if we should restore states after boot up
+    if (restoreAfterBootBool) {
+        if (pauseBool) {
+            logDebug "Restore after boot skipped - app is paused"
+            return
+        }
+
+        if (modeBool && !mode.contains(location.mode)) {
+            logDebug "Restore after boot skipped - mode is not correct; current mode ${location.mode} not in $mode"
+            return
+        }
+
+        if (switchActivationBool && activationSwitch.currentSwitch != activationSwitchOnOff) {
+            logDebug "Restore after boot skipped - activation switch condition not met"
+            return
+        }
+
+        logDebug "Restore after boot enabled - restoring device states"
+        restoreState()
+    } else {
+        logDebug "Restore after boot disabled - skipping restore"
+    }
+}
+
+/* * Function to get the last run time from a cron expression.
+ * It searches for the most recent time before now, going back up to 7 days.
+ */
+private Date getPreviousRunFromCron(String cronString) {
+    def cron = new CronExpression(cronString)
+    def now = new Date()
+    def searchStart = new Date(now.time - (7L * 24L * 60L * 60L * 1000L))
+
+    def candidate = cron.getTimeAfter(searchStart)
+    def lastRun = null
+
+    while (candidate && candidate.before(now)) {
+        lastRun = candidate
+        candidate = cron.getTimeAfter(candidate)
+    }
+
+    return lastRun
+}
+
+/* Function to set devices to last scheduled state */
+private restoreState(shouldUpdate = false) {
+    logDebug "Restoring device states"
+    if (shouldUpdate) {
+        updated()
+    }
+
+    // Process each device
+    devices.each { dev ->
+        def deviceConfig = state.devices[dev.id]
+
+        if (deviceConfig) {
+            if (deviceConfig.capability == "Button") {
+                // Don't trigger button actions on boot
+                logDebug "Skipping button action for $dev on boot up"
+                return
+            }
+
+            // Find most recent applicable schedule
+            def mostRecentSchedule = null
+            def mostRecentScheduleTime = null
+
+            // Go through all schedules for this device
+            deviceConfig.schedules.each { scheduleId, schedule ->
+                // Skip paused schedules
+                if (schedule.pause) {
+                    return
+                }
+
+                def previousRun
+                if (schedule.useVariableTime) {
+                    // Use schedule.startTime instead of grabbing the variable time directly because we've already applied offsets
+                    def dateStr = getDateFromDateTimeString(schedule.startTime)
+                    if (dateStr.equals("9999-99-99")){ // this indicates the Hub Variable is only a time, not datetime
+                        previousRun = getPreviousRunFromCron(schedule.cron)
+                    } else {
+                        def parsedDate = parseDateTime(schedule.startTime)
+                        if (parsedDate < new Date()) {
+                            previousRun = parsedDate
+                        }
+                    }
+                } else {
+                    previousRun = getPreviousRunFromCron(schedule.cron)
+                }
+
+                logDebug "previousRun for ${schedule.cron} is $previousRun"
+                if (!mostRecentScheduleTime || previousRun > mostRecentScheduleTime) {
+                    mostRecentScheduleTime = previousRun
+                    mostRecentSchedule = schedule
+                }
+            }
+
+            // If schedule was found, apply it
+            if (mostRecentSchedule) {
+                logDebug "Found most recent schedule for $dev: $mostRecentSchedule.desiredState at $mostRecentScheduleTime"
+
+                // Apply schedule based on device capability
+                if (mostRecentSchedule.desiredState == "on") {
+                    if (deviceConfig.capability == "Dimmer") {
+                        if (activateOnBeforeLevelBool) {
+                            dev.on()
+                        }
+                        dev.setLevel(mostRecentSchedule.desiredLevel)
+                        logDebug "$dev restored to brightness level $mostRecentSchedule.desiredLevel"
+                    } else {
+                        dev.on()
+                        logDebug "$dev restored to ON"
+                    }
+                } else {
+                    dev.off()
+                    logDebug "$dev restored to OFF"
+                }
+            } else {
+                logDebug "No applicable schedule found for $dev to restore state after reboot"
+            }
+        }
+    }
 }
 
 private getHubVariableList() {
@@ -1369,6 +1477,27 @@ private formatHubVariableNameWithTime(hubVariable, startTime) {
         dtString += time
     }
     return "$hubVariable<br>($dtString)"
+}
+
+private parseDateTime (String dateStr) {
+    if (dateStr == "00000000000Select000000000000") {
+        return null
+    }
+
+    try {
+        // Try ISO format first
+        def todayDateString = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd"))
+        dateStr = dateStr.replace("yyyy-mm-dd", todayDateString).replace("9999-99-99", todayDateString).replace("sss-zzzz", "000-0000")
+        return new Date().parse("yyyy-MM-dd'T'HH:mm:ss.SSSZ", dateStr)
+    } catch (Exception e1) {
+        try {
+            // Try the other format
+            return new Date().parse("EEE MMM dd HH:mm:ss zzz yyyy", dateStr)
+        } catch (Exception e2) {
+            logError "Failed to parse date: ${dateStr}. Exception 1: ${e1.message}, Exception 2: ${e2.message}"
+            return null
+        }
+    }
 }
 
 private getTimeFromDateTimeString(dt) {
