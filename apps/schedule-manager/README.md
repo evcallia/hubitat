@@ -16,6 +16,8 @@ to manually pause all schedules.
 - [Optional] Configure which modes to run schedules for
 - [Optional] Configure "override switch" that will prevent schedules from running
 - [Optional] Option to pause all schedules
+- [Optional] Restore device settings to latest schedule when hub reboots
+  - When enabled, may be configured on a per-schedule basis
 
 ## Usage
 Add code for parent app and then and child app. Install/create new instance of parent app and begin using.
@@ -51,6 +53,8 @@ Advanced Options
 3. [Optional] Turn "on" devices before issuing "setLevel" command.
    - Useful when a device doesn't turn on via a setLevel command
 4. [Optional] Pause all schedule
+5. [Optional] Restore device settings to latest schedule when hub reboots
+   - When enabled, may be configured on a per-schedule basis
 
 ![example-setup.png](./example-setup.png)
 
