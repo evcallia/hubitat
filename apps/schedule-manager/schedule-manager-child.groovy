@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-08-13
+ *  Last modified: 2025-08-18
  *
  *  Changelog:
  *
@@ -70,7 +70,10 @@
  *                     - Add support for button devices - push, doubleTap, hold, release
  *                     - Refresh schedules when hub restarts
  *  3.1.0 - 2025-08-13 - Advanced option to restore device state to most recent schedule after hub reboot
-                       - Advanced option to manually restore device state to most recent schedule
+ *                     - Advanced option to manually restore device state to most recent schedule
+ *  3.2.0 - 2025-08-18 - Add option to set hub restore functionality (when enabled) to be configured on a per-schedule basis
+ *                       - New column in table will appear exposing this setting
+ *                       - Note that the manual restore also respects these settings, even if the column is hidden
  */
 
 import groovy.json.JsonOutput
@@ -81,7 +84,7 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.1.0"
+    state.version = "3.2.0"
 }
 
 definition(
@@ -178,7 +181,7 @@ def mainPage() {
                 input name: "activationSwitchOnOff", type: "enum", title: getFormat("important2", "on or off?"), submitOnChange: true, style: 'margin-left:70px', multiple: false, required: true, options: ["on", "off"]
             }
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
-            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>When this option is selected, a new column called \"Restore at Boot\" will appear in the table where you can manage this setting for individual times. <br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
             input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Shuts off in 1hr</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
         }
@@ -197,9 +200,9 @@ def mainPage() {
                     <li>To use Hub Variables with/- offset, check 'Use Hub Variable' box, select your variable, click number to enter offset.</li>
                     <li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>
                     <li>Optional: Select which modes to run schedules for.</li>
-                    <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentailly a pause button for all schedules.</li>
+                    <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentially a pause button for all schedules.</li>
                     <li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
-                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
+                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. When this option is selected, a new column called "Restore at Boot" will appear in the table where you can manage this setting for individual times. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
                     <li>Optional: Select whether you want to pause all schedules.</li>
                 </ul>"""
         }
@@ -878,6 +881,18 @@ String displayTable() {
         state.remove("removeRunTime")
     }
 
+    if (state.restoreToggle){
+        def (deviceId, scheduleId) = state.restoreToggle.tokenize('|')
+
+        if (state.devices[deviceId].schedules[scheduleId].restore) {
+            state.devices[deviceId].schedules[scheduleId].restore = false
+        } else {
+            state.devices[deviceId].schedules[scheduleId].restore = true
+        }
+
+        state.remove("restoreToggle")
+    }
+
     // Type/Capability
     if (state.setCapabilityDimmer) {
         def deviceId = state.setCapabilityDimmer
@@ -933,6 +948,13 @@ String displayTable() {
         <th>Desired<br>State</th>
         <th class='prominent-border-right'>Desired<br>Level</th>
         <th>Remove<br>Run</th>
+    """
+
+    if (restoreAfterBootBool) {
+        str += "<th>Restore<br>at Boot</th>"
+    }
+
+    str += """
         </tr></thead>
     """
 
@@ -1093,7 +1115,7 @@ String displayTable() {
                 }
             }
 
-            str += "<td $td_border_bottom title='Check Box to select Day'>$sunCheckBoxT</td>" +
+             str += "<td $td_border_bottom title='Check Box to select Day'>$sunCheckBoxT</td>" +
                     "<td $td_border_bottom title='Check Box to select Day'>$monCheckBoxT</td>" +
                     "<td $td_border_bottom title='Check Box to select Day'>$tueCheckBoxT</td>" +
                     "<td $td_border_bottom title='Check Box to select Day'>$wedCheckBoxT</td>" +
@@ -1105,12 +1127,27 @@ String displayTable() {
 
             def td_borders = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
             if (state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off")) {
-                str += "<td $td_borders></td>"
+                str += "<td $td_borders>-</td>"
             } else {
                 str += "<td $td_borders style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
             }
 
-            str += "<td $td_border_bottom title='Click to remove run'>$removeRunButton</td></tr>"
+            str += "<td $td_border_bottom title='Click to remove run'>$removeRunButton</td>"
+
+            if (restoreAfterBootBool) {
+                if (schedule.restore == null) {
+                    schedule.restore = true // Default to true if not set
+                }
+
+                if (state.devices["$dev.id"].capability == "Button") {
+                    str += "<td $td_border_bottom>-</td>"
+                } else {
+                    def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
+                    str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
+                }
+            }
+
+            str += "</tr>"
         }
     }
     str += "</table></div>"
@@ -1231,6 +1268,7 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("desiredState|")) state.desiredState = btn.minus("desiredState|")
     else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
     else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
+    else if (btn.startsWith("restoreToggle|")) state.restoreToggle = btn.minus("restoreToggle|")
 }
 
 
@@ -1399,7 +1437,11 @@ private restoreState(shouldUpdate = false) {
                     // Use schedule.startTime instead of grabbing the variable time directly because we've already applied offsets
                     def dateStr = getDateFromDateTimeString(schedule.startTime)
                     if (dateStr.equals("9999-99-99")){ // this indicates the Hub Variable is only a time, not datetime
-                        previousRun = getPreviousRunFromCron(schedule.cron)
+                        try {
+                            previousRun = getPreviousRunFromCron(schedule.cron)
+                        } catch (Exception e) {
+                            logWarn "Failed to get previous run from cron for schedule ${scheduleId}, cron ${schedule.cron}: ${e.message}"
+                        }
                     } else {
                         def parsedDate = parseDateTime(schedule.startTime)
                         if (parsedDate < new Date()) {
@@ -1407,7 +1449,11 @@ private restoreState(shouldUpdate = false) {
                         }
                     }
                 } else {
-                    previousRun = getPreviousRunFromCron(schedule.cron)
+                    try {
+                        previousRun = getPreviousRunFromCron(schedule.cron)
+                    } catch (Exception e) {
+                        logWarn "Failed to get previous run from cron for schedule ${scheduleId}, cron ${schedule.cron}: ${e.message}"
+                    }
                 }
 
                 logDebug "previousRun for ${schedule.cron} is $previousRun"
@@ -1420,6 +1466,12 @@ private restoreState(shouldUpdate = false) {
             // If schedule was found, apply it
             if (mostRecentSchedule) {
                 logDebug "Found most recent schedule for $dev: $mostRecentSchedule.desiredState at $mostRecentScheduleTime"
+
+                // Skip if restore is not enabled
+                if (!mostRecentSchedule.restore) {
+                    logDebug "Skipping restore for $dev - restore at boot not enabled for this schedule"
+                    return
+                }
 
                 // Apply schedule based on device capability
                 if (mostRecentSchedule.desiredState == "on") {
@@ -1531,26 +1583,27 @@ String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15
 // Generate a new, empty schedule
 static LinkedHashMap<String, Object> generateDefaultSchedule() {
     return [
-            sunTime  : false,
-            sunset   : true,
-            offset   : 0,
-            sun      : true,
-            mon      : true,
-            tue      : true,
-            wed      : true,
-            thu      : true,
-            fri      : true,
-            sat      : true,
-            startTime: "00000000000Select000000000000",
-            cron     : "",
-            days     : "",
-            pause    : false,
-            desiredState: "on",
-            desiredLevel: 100,
+            sunTime        : false,
+            sunset         : true,
+            offset         : 0,
+            sun            : true,
+            mon            : true,
+            tue            : true,
+            wed            : true,
+            thu            : true,
+            fri            : true,
+            sat            : true,
+            startTime      : "00000000000Select000000000000",
+            cron           : "",
+            days           : "",
+            pause          : false,
+            desiredState   : "on",
+            desiredLevel   : 100,
             useVariableTime: false,
-            variableTime: null,
-            buttonNumber: null,
-            buttonAction: null
+            variableTime   : null,
+            buttonNumber   : null,
+            buttonAction   : null,
+            restore        : true
     ]
 }
 
@@ -1568,6 +1621,12 @@ def displayTitle() {
 void logDebug(msg) {
     if (logEnableBool) {
         log.debug("${app.label} - $msg")
+    }
+}
+
+void logWarn(msg) {
+    if (logEnableBool) {
+        log.warn("${app.label} - $msg")
     }
 }
 
