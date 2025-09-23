@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-08-18
+ *  Last modified: 2025-08-19
  *
  *  Changelog:
  *
@@ -74,6 +74,7 @@
  *  3.2.0 - 2025-08-18 - Add option to set hub restore functionality (when enabled) to be configured on a per-schedule basis
  *                       - New column in table will appear exposing this setting
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
+ *  3.2.1 - 2025-08-19 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
  */
 
 import groovy.json.JsonOutput
@@ -84,7 +85,7 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.2.0"
+    state.version = "3.2.1"
 }
 
 definition(
@@ -1651,12 +1652,6 @@ void initialize() {
         return
     }
 
-    def refreshSchedule = determineDailyRefreshCron()
-    schedule(refreshSchedule.cron, updated) // Daily refresh for sunrise/sunset and Hub Variables
-    state.dailyRefreshCron = refreshSchedule.cron
-    state.dailyRefreshTime = refreshSchedule.time
-    logDebug "Daily refresh scheduled for ${refreshSchedule.time} using cron ${refreshSchedule.cron}"
-
     logDebug state.devices
 
     // Set device cron schedules
@@ -1681,6 +1676,12 @@ void initialize() {
             }
         }
     }
+
+    def refreshSchedule = determineDailyRefreshCron()
+    schedule(refreshSchedule.cron, updated) // Daily refresh for sunrise/sunset and Hub Variables
+    state.dailyRefreshCron = refreshSchedule.cron
+    state.dailyRefreshTime = refreshSchedule.time
+    logDebug "Daily refresh scheduled for ${refreshSchedule.time} using cron ${refreshSchedule.cron}"
 }
 
 private Map determineDailyRefreshCron() {
