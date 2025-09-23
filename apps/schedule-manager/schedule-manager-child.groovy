@@ -1651,7 +1651,11 @@ void initialize() {
         return
     }
 
-    schedule("0 0 1 ? * * *", updated) // Every day at 1am update schedules (refreshes sun rise/set and Hub Variables)
+    def refreshSchedule = determineDailyRefreshCron()
+    schedule(refreshSchedule.cron, updated) // Daily refresh for sunrise/sunset and Hub Variables
+    state.dailyRefreshCron = refreshSchedule.cron
+    state.dailyRefreshTime = refreshSchedule.time
+    logDebug "Daily refresh scheduled for ${refreshSchedule.time} using cron ${refreshSchedule.cron}"
 
     logDebug state.devices
 
@@ -1677,6 +1681,68 @@ void initialize() {
             }
         }
     }
+}
+
+private Map determineDailyRefreshCron() {
+    Set<String> scheduledTimes = getScheduledTimesForConflictCheck()
+
+    String hourStr = "01"
+
+    for (int minute = 0; minute < 60; minute += 5) {
+        String minuteStr = String.format("%02d", minute)
+        String candidateTime = "${hourStr}:${minuteStr}"
+
+        if (!scheduledTimes.contains(candidateTime)) {
+            String cron = "0 ${minuteStr} ${hourStr} ? * * *"
+            return [cron: cron, time: candidateTime]
+        }
+
+        logDebug "Daily refresh conflict detected at ${candidateTime}; checking next 5-minute slot"
+    }
+
+    logWarn "Unable to find available time between 01:00 and 01:55 for daily refresh. Defaulting to 01:00."
+    return [cron: "0 00 01 ? * * *", time: "01:00"]
+}
+
+private Set<String> getScheduledTimesForConflictCheck() {
+    Set<String> scheduledTimes = [] as Set
+
+    state.devices?.each { deviceId, deviceConfig ->
+        deviceConfig?.schedules?.each { scheduleId, schedule ->
+            if (schedule && !schedule.pause) {
+                boolean added = false
+                String cron = schedule.cron
+
+                if (cron && !cron.contains("Sel")) {
+                    List<String> cronParts = cron.tokenize(' ')
+                    if (cronParts.size() >= 3) {
+                        String minute = cronParts[1].padLeft(2, '0')
+                        String hour = cronParts[2].padLeft(2, '0')
+                        if (hour == "01") {
+                            scheduledTimes << "${hour}:${minute}"
+                            added = true
+                        }
+                    }
+                }
+
+                if (!added) {
+                    String startTime = schedule.startTime
+                    if (startTime && startTime.contains('T')) {
+                        try {
+                            String time = getTimeFromDateTimeString(startTime)
+                            if (time && time != "99:99" && time.startsWith("01:")) {
+                                scheduledTimes << time
+                            }
+                        } catch (Exception ignored) {
+                            // Ignore invalid start times
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return scheduledTimes
 }
 
 // Required handler for when a hub variable is renamed
