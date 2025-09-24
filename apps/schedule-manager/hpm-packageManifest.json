@@ -1,8 +1,8 @@
 {
   "packageName": "Schedule Manager",
   "author": "Evan Callia",
-  "version": "3.2.0",
-  "releaseNotes": "- Add option to set hub restore functionality (when enabled) to be configured on a per-schedule basis\n  - New column in table will appear exposing this setting\n  - Note that the manual restore also respects these settings, even if the column is hidden",
+  "version": "3.2.1",
+  "releaseNotes": "- Automatically stagger the daily sunrise/sunset refresh away from 1:00 AM user schedules\n- Allow for configuring debug log duration",
   "minimumHEVersion": "0.0.0",
   "dateReleased": "2024-11-18",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
