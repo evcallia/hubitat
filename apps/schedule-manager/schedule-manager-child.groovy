@@ -75,6 +75,7 @@
  *                       - New column in table will appear exposing this setting
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
  *  3.2.1 - 2025-09-23 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
+ *                     - Allow for configuring debug log duration
  */
 
 import groovy.json.JsonOutput
@@ -91,11 +92,11 @@ def titleVersion() {
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia-dev",
+        namespace: "evcallia",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia-dev:Schedule Manager",
+        parent: "evcallia:Schedule Manager",
         iconUrl: "",
         iconX2Url: "",
         oauth: true
@@ -1715,8 +1716,6 @@ void initialize() {
 
     def refreshSchedule = determineDailyRefreshCron()
     schedule(refreshSchedule.cron, updated) // Daily refresh for sunrise/sunset and Hub Variables
-    state.dailyRefreshCron = refreshSchedule.cron
-    state.dailyRefreshTime = refreshSchedule.time
     logDebug "Daily refresh scheduled for ${refreshSchedule.time} using cron ${refreshSchedule.cron}"
 }
 
@@ -1725,20 +1724,19 @@ private Map determineDailyRefreshCron() {
     logDebug "Scheduled times at 01:00 hour for conflict check: $scheduledTimes"
     String hourStr = "01"
 
-    for (int minute = 0; minute < 60; minute += 5) {
+    for (int minute = 0; minute < 60; minute += 1) {
         String minuteStr = String.format("%02d", minute)
         String candidateTime = "${hourStr}:${minuteStr}"
-
+        
         if (!scheduledTimes.contains(candidateTime)) {
-            logDebug "No conflict detected for daily refresh at ${candidateTime}"
             String cron = "0 ${minuteStr} ${hourStr} ? * * *"
             return [cron: cron, time: candidateTime]
         }
 
-        logDebug "Daily refresh conflict detected at ${candidateTime}; checking next 5-minute slot"
+        logDebug "Daily refresh conflict detected at ${candidateTime}; checking next 1-minute slot"
     }
 
-    logWarn "Unable to find available time between 01:00 and 01:55 for daily refresh. Defaulting to 01:00."
+    logWarn "Unable to find available time between 01:00 and 01:59 for daily refresh. Defaulting to 01:00. This may result in a race condition where the schedule at 1:00 does not run."
     return [cron: "0 00 01 ? * * *", time: "01:00"]
 }
 
@@ -1757,7 +1755,8 @@ private Set<String> getScheduledTimesForConflictCheck() {
                         String minute = cronParts[1].padLeft(2, '0')
                         String hour = cronParts[2].padLeft(2, '0')
                         if (hour == "01") {
-                            scheduledTimes << "${hour}:${minute}"
+                            String time = "${hour}:${minute}"
+                            scheduledTimes.add(time)
                             added = true
                         }
                     }
@@ -1769,7 +1768,7 @@ private Set<String> getScheduledTimesForConflictCheck() {
                         try {
                             String time = getTimeFromDateTimeString(startTime)
                             if (time && time != "99:99" && time.startsWith("01:")) {
-                                scheduledTimes << time
+                                scheduledTimes.add(time)
                             }
                         } catch (Exception ignored) {
                             // Ignore invalid start times
