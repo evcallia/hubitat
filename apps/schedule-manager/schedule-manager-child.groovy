@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-08-19
+ *  Last modified: 2025-09-23
  *
  *  Changelog:
  *
@@ -74,7 +74,7 @@
  *  3.2.0 - 2025-08-18 - Add option to set hub restore functionality (when enabled) to be configured on a per-schedule basis
  *                       - New column in table will appear exposing this setting
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
- *  3.2.1 - 2025-08-19 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
+ *  3.2.1 - 2025-09-23 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
  */
 
 import groovy.json.JsonOutput
@@ -91,11 +91,11 @@ def titleVersion() {
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia",
+        namespace: "evcallia-dev",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia:Schedule Manager",
+        parent: "evcallia-dev:Schedule Manager",
         iconUrl: "",
         iconX2Url: "",
         oauth: true
@@ -184,7 +184,10 @@ def mainPage() {
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>When this option is selected, a new column called \"Restore at Boot\" will appear in the table where you can manage this setting for individual times. <br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
-            input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Shuts off in 1hr</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
+            input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Auto disables after configured duration</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
+            if (logEnableBool) {
+                input name: "logEnableMinutes", type: "number", title: getFormat("important2", "<b>How many minutes should logging stay enabled?</b><br><small>0 = Indefinite</small>"), defaultValue: 60, submitOnChange: true, style: 'margin-left:70px'
+            }
         }
 
 
@@ -1637,6 +1640,32 @@ void logError(msg) {
     }
 }
 
+private Integer getLoggingDurationMinutes() {
+    def minutesSetting = settings?.logEnableMinutes
+    Integer minutes = 60
+
+    if (minutesSetting != null) {
+        if (minutesSetting instanceof Number) {
+            minutes = (minutesSetting as Number).intValue()
+        } else {
+            String minutesStr = minutesSetting.toString()
+            if (minutesStr?.trim()) {
+                try {
+                    minutes = minutesStr.toInteger()
+                } catch (NumberFormatException ignored) {
+                    // keep default when conversion fails
+                }
+            }
+        }
+    }
+
+    if (minutes < 0) {
+        minutes = 60
+    }
+
+    return minutes
+}
+
 
 //**** Required Methods ****//
 
@@ -1645,7 +1674,14 @@ void initialize() {
 
     subscribe(location, "systemStart", handleHubBootUp)
 
-    if (logEnableBool) runIn(3600, logsOff)  // Disable all Logging after time elapsed
+    if (logEnableBool) {
+        Integer loggingMinutes = getLoggingDurationMinutes()
+        if (loggingMinutes == 0) {
+            logDebug "Logging enabled indefinitely per configuration"
+        } else {
+            runIn(loggingMinutes * 60, logsOff)  // Disable Logging after configured time elapsed
+        }
+    }
 
     if (pauseBool) {
         logDebug "All schedules have been manually paused. Will skip scheduling"
@@ -1686,7 +1722,7 @@ void initialize() {
 
 private Map determineDailyRefreshCron() {
     Set<String> scheduledTimes = getScheduledTimesForConflictCheck()
-
+    logDebug "Scheduled times at 01:00 hour for conflict check: $scheduledTimes"
     String hourStr = "01"
 
     for (int minute = 0; minute < 60; minute += 5) {
@@ -1694,6 +1730,7 @@ private Map determineDailyRefreshCron() {
         String candidateTime = "${hourStr}:${minuteStr}"
 
         if (!scheduledTimes.contains(candidateTime)) {
+            logDebug "No conflict detected for daily refresh at ${candidateTime}"
             String cron = "0 ${minuteStr} ${hourStr} ? * * *"
             return [cron: cron, time: candidateTime]
         }
