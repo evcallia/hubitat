@@ -1367,7 +1367,6 @@ String displayTable() {
                 rowsRemaining -= 1
             }
         }
-        }
     }
     str += "</table></div>"
     return str
