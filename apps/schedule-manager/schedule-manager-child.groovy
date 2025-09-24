@@ -41,7 +41,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-09-23
+ *  Last modified: 2025-10-05
  *
  *  Changelog:
  *
@@ -76,6 +76,8 @@
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
  *  3.2.1 - 2025-09-23 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
  *                     - Allow for configuring debug log duration
+ *  3.3.0 - 2025-10-05 - Add option to configure dual times and run at the earlier or later value
+ *                     - Update cron generation and UI to support dual-time schedules
  */
 
 import groovy.json.JsonOutput
@@ -86,7 +88,7 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.2.1"
+    state.version = "3.3.0"
 }
 
 definition(
@@ -183,6 +185,7 @@ def mainPage() {
                 input name: "activationSwitchOnOff", type: "enum", title: getFormat("important2", "on or off?"), submitOnChange: true, style: 'margin-left:70px', multiple: false, required: true, options: ["on", "off"]
             }
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "dualTimeBool", type: "bool", title: getFormat("important2", "<b>Enable earlier/later dual times?</b><br><small>Allows each schedule to configure two times and run at the earlier or later value.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>When this option is selected, a new column called \"Restore at Boot\" will appear in the table where you can manage this setting for individual times. <br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
             input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Auto disables after configured duration</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
@@ -256,13 +259,20 @@ def updateTime() {
     def json = request.JSON
     def deviceId = json.deviceId
     def scheduleId = json.scheduleId
+    def timeType = json.timeType
     def newStartTime = json.startTime
     def zdt = ZonedDateTime.now().withHour(newStartTime.split(':')[0].toInteger())
                                 .withMinute(newStartTime.split(':')[1].toInteger())
                                 .withSecond(0)
                                 .withNano(0)
     def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
-    state.devices[deviceId].schedules[scheduleId].startTime = zdt.format(formatter)
+    def schedule = state.devices[deviceId].schedules[scheduleId]
+    if (timeType == "secondary") {
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        secondary.startTime = zdt.format(formatter)
+    } else {
+        schedule.startTime = zdt.format(formatter)
+    }
 }
 
 def updateOffset() {
@@ -270,14 +280,34 @@ def updateOffset() {
     def json = request.JSON
     def deviceId = json.deviceId
     def scheduleId = json.scheduleId
+    def timeType = json.timeType
     def newOffset = json.offset.toInteger()
-    state.devices[deviceId].schedules[scheduleId].offset = newOffset
-    refreshVariables()
-    if (state.devices[deviceId].schedules[scheduleId].useVariableTime) {
-        render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(state.devices[deviceId].schedules[scheduleId].variableTime, state.devices[deviceId].schedules[scheduleId].startTime), offset: newOffset, varType: "hubVariable"])
+    def schedule = state.devices[deviceId].schedules[scheduleId]
+
+    if (timeType == "secondary") {
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        secondary.offset = newOffset
     } else {
-        def newStartTime = getTimeFromDateTimeString(state.devices[deviceId].schedules[scheduleId].startTime)
-        render contentType: "application/json", data: JsonOutput.toJson([startTime: newStartTime, offset: newOffset, varType: "sun"])
+        schedule.offset = newOffset
+    }
+
+    refreshVariables()
+
+    if (timeType == "secondary") {
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        if (secondary.useVariableTime) {
+            render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(secondary.variableTime, secondary.startTime), offset: newOffset, varType: "hubVariable", timeType: "secondary"])
+        } else {
+            def newStartTime = getTimeFromDateTimeString(secondary.startTime)
+            render contentType: "application/json", data: JsonOutput.toJson([startTime: newStartTime, offset: newOffset, varType: "sun", timeType: "secondary"])
+        }
+    } else {
+        if (schedule.useVariableTime) {
+            render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(schedule.variableTime, schedule.startTime), offset: newOffset, varType: "hubVariable", timeType: "primary"])
+        } else {
+            def newStartTime = getTimeFromDateTimeString(schedule.startTime)
+            render contentType: "application/json", data: JsonOutput.toJson([startTime: newStartTime, offset: newOffset, varType: "sun", timeType: "primary"])
+        }
     }
 }
 
@@ -295,10 +325,25 @@ def updateHubVariable() {
     def json = request.JSON
     def deviceId = json.deviceId
     def scheduleId = json.scheduleId
+    def timeType = json.timeType
     def newVariable = json.hubVariable
-    state.devices[deviceId].schedules[scheduleId].variableTime = newVariable
+    def schedule = state.devices[deviceId].schedules[scheduleId]
+
+    if (timeType == "secondary") {
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        secondary.variableTime = newVariable
+    } else {
+        schedule.variableTime = newVariable
+    }
+
     updateVariableTimes()
-    render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(newVariable, state.devices[deviceId].schedules[scheduleId].startTime)])
+
+    if (timeType == "secondary") {
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(newVariable, secondary.startTime), timeType: "secondary"])
+    } else {
+        render contentType: "application/json", data: JsonOutput.toJson([startTime: formatHubVariableNameWithTime(newVariable, schedule.startTime), timeType: "primary"])
+    }
 }
 
 def getHubVariableOptions() {
@@ -374,6 +419,39 @@ String loadCSS() {
             }
             .device-link a:hover {
                 text-decoration: underline;
+            }
+            tr.schedule-group-primary td {
+                background-color: rgba(33, 150, 243, 0.12);
+                border-top: 2px solid rgba(33, 150, 243, 0.45) !important;
+            }
+            tr.schedule-group-secondary td {
+                background-color: rgba(33, 150, 243, 0.08);
+                border-bottom: 2px solid rgba(33, 150, 243, 0.45) !important;
+            }
+            tr.schedule-group-primary td:first-child,
+            tr.schedule-group-secondary td:first-child {
+                box-shadow: inset 4px 0 0 #1E88E5;
+            }
+            .schedule-time-wrapper {
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+                align-items: center;
+            }
+            .schedule-badge {
+                display: inline-block;
+                padding: 2px 8px;
+                border-radius: 12px;
+                font-size: 11px;
+                font-weight: 600;
+                color: #0D47A1;
+                background-color: rgba(13, 71, 161, 0.15);
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+            .schedule-badge-secondary {
+                color: #004D40;
+                background-color: rgba(0, 77, 64, 0.18);
             }
             .mdl-cell .mdl-textfield div {
               white-space: normal !important;
@@ -541,7 +619,8 @@ String loadScript() {
             }
 
             // Time input popup
-            function editStartTimePopup(deviceId, scheduleId, currentValue) {
+            function editStartTimePopup(deviceId, scheduleId, currentValue, timeType) {
+                const effectiveTimeType = timeType || null;
                 const content = `
                     <label class="popup-label">Enter Desired Time</label>
                     <input type="time" class="popup-input" id="timeInput" value="\${currentValue || ''}">
@@ -559,13 +638,15 @@ String loadScript() {
                         var data = JSON.stringify({
                             deviceId: deviceId,
                             scheduleId: scheduleId,
-                            startTime: input.value
+                            startTime: input.value,
+                            timeType: effectiveTimeType
                         });
 
                         xhr.onreadystatechange = function() {
                             if (xhr.readyState === 4 && xhr.status === 200) {
                                 // When successful, update the input field in the table so we don't need to page refresh
-                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId).innerHTML = timeInput.value;
+                                const suffix = effectiveTimeType ? "|" + effectiveTimeType : "";
+                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId + suffix).innerHTML = input.value;
                             }
                         };
 
@@ -576,7 +657,8 @@ String loadScript() {
             }
 
             // Offset input popup
-            function newOffsetPopup(deviceId, scheduleId, currentValue) {
+            function newOffsetPopup(deviceId, scheduleId, currentValue, timeType) {
+                const effectiveTimeType = timeType || null;
                 const content = `
                     <label class="popup-label">Enter +/- Offset time (in minutes)</label>
                     <input type="number" class="popup-input" id="offsetInput" value="\${currentValue || '0'}">
@@ -594,7 +676,8 @@ String loadScript() {
                         var data = JSON.stringify({
                             deviceId: deviceId,
                             scheduleId: scheduleId,
-                            offset: input.value
+                            offset: input.value,
+                            timeType: effectiveTimeType
                         });
 
                         xhr.onreadystatechange = function() {
@@ -603,16 +686,19 @@ String loadScript() {
                                 const jsonResponse = JSON.parse(xhr.responseText);
                                 const newStartTime = jsonResponse.startTime;
                                 const varType = jsonResponse.varType;
+                                const responseTimeType = jsonResponse.timeType || effectiveTimeType;
 
-                                var idPrefix = ""
+                                const suffix = responseTimeType ? "|" + responseTimeType : "";
+
+                                var idPrefix = "";
                                 if (varType === "hubVariable") {
                                     idPrefix = "selectVariableStartTime|";
                                 } else {
                                     idPrefix = "editStartTime|";
                                 }
 
-                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId).innerHTML = input.value;
-                                document.getElementById(idPrefix + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId + suffix).innerHTML = input.value;
+                                document.getElementById(idPrefix + deviceId + "|" + scheduleId + suffix).innerHTML = newStartTime;
                             }
                         };
 
@@ -621,7 +707,6 @@ String loadScript() {
                     hidePopup();
                 });
             }
-
             // Dimmer level popup
             function desiredLevelPopup(deviceId, scheduleId, currentValue) {
                 const content = `
@@ -658,7 +743,8 @@ String loadScript() {
             }
 
             // Hub Variable popup
-            function selectVariableStartTimePopup(deviceId, scheduleId, currentValue) {
+            function selectVariableStartTimePopup(deviceId, scheduleId, currentValue, timeType) {
+                const effectiveTimeType = timeType || null;
                 const fetchOptions = () => {
                     return fetch('/apps/api/${app.id}/getHubVariableOptions?access_token=${state.accessToken}')
                         .then(response => response.json())
@@ -694,7 +780,8 @@ String loadScript() {
                             var data = JSON.stringify({
                                 deviceId: deviceId,
                                 scheduleId: scheduleId,
-                                hubVariable: input.value
+                                hubVariable: input.value,
+                                timeType: effectiveTimeType
                             });
 
                             xhr.onreadystatechange = function() {
@@ -702,8 +789,10 @@ String loadScript() {
                                     // When successful, update the input field in the table so we don't need to page refresh
                                     const jsonResponse = JSON.parse(xhr.responseText);
                                     const newStartTime = jsonResponse.startTime;
+                                    const responseTimeType = jsonResponse.timeType || effectiveTimeType;
+                                    const suffix = responseTimeType ? "|" + responseTimeType : "";
 
-                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId).innerHTML = newStartTime;
+                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId + suffix).innerHTML = newStartTime;
                                 }
                             };
 
@@ -713,7 +802,6 @@ String loadScript() {
                     });
                 });
             }
-
             // Button number change
             function buttonNumberChange(deviceId, scheduleId, value) {
                 var xhr = new XMLHttpRequest();
@@ -859,14 +947,62 @@ String displayTable() {
         state.remove("useVariableTimeUnChecked")
     }
 
-    if (state.sunsetCheckedBox) {
-        def (deviceId, scheduleId) = state.sunsetCheckedBox.tokenize('|')
-        state.devices[deviceId].schedules[scheduleId].sunset = true
-        state.remove("sunsetCheckedBox")
-    } else if (state.sunsetUnCheckedBox) {
-        def (deviceId, scheduleId) = state.sunsetUnCheckedBox.tokenize('|')
-        state.devices[deviceId].schedules[scheduleId].sunset = false
-        state.remove("sunsetUnCheckedBox")
+    if (state.toggleEarlierLater) {
+        def (deviceId, scheduleId) = state.toggleEarlierLater.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        def current = schedule.earlierLater ?: "Select"
+        if (current == "-") {
+            current = "Select"
+        }
+        def nextValue = "Select"
+        if (current == "Select") {
+            nextValue = "earlier"
+        } else if (current == "earlier") {
+            nextValue = "later"
+        }
+        schedule.earlierLater = nextValue
+        ensureSecondaryTimeConfig(schedule)
+        state.remove("toggleEarlierLater")
+    }
+
+    if (state.sunTimeSecondaryChecked) {
+        def (deviceId, scheduleId) = state.sunTimeSecondaryChecked.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        secondary.sunTime = true
+        secondary.useVariableTime = false
+        state.remove("sunTimeSecondaryChecked")
+    } else if (state.sunTimeSecondaryUnChecked) {
+        def (deviceId, scheduleId) = state.sunTimeSecondaryUnChecked.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        ensureSecondaryTimeConfig(schedule).sunTime = false
+        state.remove("sunTimeSecondaryUnChecked")
+    }
+
+    if (state.sunsetSecondaryChecked) {
+        def (deviceId, scheduleId) = state.sunsetSecondaryChecked.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        ensureSecondaryTimeConfig(schedule).sunset = true
+        state.remove("sunsetSecondaryChecked")
+    } else if (state.sunsetSecondaryUnChecked) {
+        def (deviceId, scheduleId) = state.sunsetSecondaryUnChecked.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        ensureSecondaryTimeConfig(schedule).sunset = false
+        state.remove("sunsetSecondaryUnChecked")
+    }
+
+    if (state.useVariableTimeSecondaryChecked) {
+        def (deviceId, scheduleId) = state.useVariableTimeSecondaryChecked.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        def secondary = ensureSecondaryTimeConfig(schedule)
+        secondary.useVariableTime = true
+        secondary.sunTime = false
+        state.remove("useVariableTimeSecondaryChecked")
+    } else if (state.useVariableTimeSecondaryUnChecked) {
+        def (deviceId, scheduleId) = state.useVariableTimeSecondaryUnChecked.tokenize('|')
+        def schedule = state.devices[deviceId].schedules[scheduleId]
+        ensureSecondaryTimeConfig(schedule).useVariableTime = false
+        state.remove("useVariableTimeSecondaryUnChecked")
     }
 
     // Add/Remove Run Times
@@ -942,6 +1078,12 @@ String displayTable() {
         <th>Use Sun<br>Set/Rise?</th>
         <th>Rise or<br>Set?</th>
         <th>Offset<br>+/-Min</th>
+    """
+    if (dualTimeBool) {
+        str += "<th>Earlier<br>or Later</th>"
+    }
+
+    str += """
         <th>Sun</th>
         <th>Mon</th>
         <th>Tue</th>
@@ -953,8 +1095,7 @@ String displayTable() {
         <th>Desired<br>State</th>
         <th class='prominent-border-right'>Desired<br>Level</th>
         <th>Remove<br>Run</th>
-    """
-
+"""
     if (restoreAfterBootBool) {
         str += "<th>Restore<br>at Boot</th>"
     }
@@ -972,19 +1113,36 @@ String displayTable() {
         String deviceLink = "<a href='/device/edit/$dev.id' target='_blank' title='Open Device Page for $dev'>$dev</a>"
         String addNewRunButton = buttonLink("addNew|$dev.id", "<iconify-icon icon='material-symbols:add-circle-outline-rounded'></iconify-icon>", "#4CAF50", "24px")
         int thisZone = state.devices["$dev.id"].zone = zone
-        int scheduleCount = state.devices["$dev.id"].schedules.size()
+        def deviceSchedules = state.devices["$dev.id"].schedules
+
+        deviceSchedules.each { entry ->
+            if (!entry.value.earlierLater || entry.value.earlierLater == "-") {
+                entry.value.earlierLater = "Select"
+            }
+            ensureSecondaryTimeConfig(entry.value)
+        }
+
+        int scheduleCount = deviceSchedules.collect { entry ->
+            (dualTimeBool && ["earlier", "later"].contains(entry.value.earlierLater)) ? 2 : 1
+        }.sum()
+
+        if (scheduleCount == 0) {
+            scheduleCount = 1
+        }
 
         def prominentBorderBottom = (zone != devices.size()) ? "class='prominent-border-bottom'" : ""
-        str += "<tr class='device-section'>" +
-                   "<td $prominentBorderBottom rowspan='$scheduleCount'>$thisZone</td>" +
-                   "<td $prominentBorderBottom rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
+        def prominentBorders = (zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
 
+        String zoneCell = "<td $prominentBorderBottom rowspan='$scheduleCount'>$thisZone</td>"
+        String deviceCell = "<td $prominentBorderBottom rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
+
+        String statusCell
         if (dev.currentSwitch) {
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == "on" ? "#4CAF50" : "#F44336"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == "on" ? "circle" : "do-not-disturb-on-outline"}'></iconify-icon></td>"
+            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == \"on\" ? \"#4CAF50\" : \"#F44336\"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == \"on\" ? \"circle\" : \"do-not-disturb-on-outline\"}'></iconify-icon></td>"
         } else if (dev.currentValve) {
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == "open" ? "#4CAF50" : "#F44336"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == \"open\" ? \"#4CAF50\" : \"#F44336\"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         } else {
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount'></td>"
+            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount'></td>"
         }
 
         def supportedCapabilities = []
@@ -998,29 +1156,29 @@ String displayTable() {
             supportedCapabilities.add("Button")
         }
 
+        String capabilityCell
         if (supportedCapabilities.size() > 1) {
             int nextIndex = (supportedCapabilities.indexOf(state.devices["$dev.id"].capability) + 1) % supportedCapabilities.size()
             def capabilityButton = buttonLink("setCapability${supportedCapabilities[nextIndex]}|${dev.id}", state.devices[dev.id].capability, "#2196F3")
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices["$dev.id"].capability}'>$capabilityButton</td>"
+            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices[\"$dev.id\"].capability}'>$capabilityButton</td>"
         } else {
-            str += "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices["$dev.id"].capability}'>${state.devices["$dev.id"].capability}</td>"
+            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices[\"$dev.id\"].capability}'>${state.devices[\"$dev.id\"].capability}</td>"
         }
 
-        def prominentBorders = (zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
-        str += "<td $prominentBorders rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
+        String addNewCell = "<td $prominentBorders rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
 
         //**** Update sunrise/set & hub variable times ****//
         refreshVariables()
 
         // order schedules so table is sorted by time
-        def sortedSchedules = state.devices["$dev.id"].schedules.sort { a, b ->
+        def sortedSchedules = deviceSchedules.sort { a, b ->
             try {
-                def dateA = parseDateTime(a.value.startTime)
-                def dateB = parseDateTime(b.value.startTime)
+                def configA = getEffectiveTimeConfig(a.value).config
+                def configB = getEffectiveTimeConfig(b.value).config
+                def dateA = parseDateTime(configA.startTime ?: a.value.startTime)
+                def dateB = parseDateTime(configB.startTime ?: b.value.startTime)
                 if (dateA && dateB) {
-                    def timeA = dateA.format('HH:mm')
-                    def timeB = dateB.format('HH:mm')
-                    return timeA <=> timeB
+                    return dateA <=> dateB
                 }
                 return 0
             } catch (Exception e) {
@@ -1029,15 +1187,31 @@ String displayTable() {
             }
         }
 
-        //**** Iterate each schedule, configuring the 'schedule' section of the table ****//
+        int rowsRemaining = scheduleCount
+        boolean firstScheduleRow = true
 
-        def num_schedules = state.devices["$dev.id"].schedules.size()
         sortedSchedules.each { scheduleId, schedule ->
-            num_schedules = num_schedules - 1
-            String thisStartTime = getTimeFromDateTimeString(schedule.startTime)
-            String thisOffsetTime = schedule.offset
             String deviceAndScheduleId = "${dev.id}|$scheduleId"
+            boolean hasSecondaryRow = dualTimeBool && ["earlier", "later"].contains(schedule.earlierLater)
+            boolean isLastRowAfterThis = (!hasSecondaryRow && rowsRemaining == 1)
+            def td_border_bottom = (isLastRowAfterThis && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
+            def td_borders = (isLastRowAfterThis && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
 
+            String thisStartTime = getTimeFromDateTimeString(schedule.startTime)
+            String thisOffsetTime = (schedule.offset != null) ? schedule.offset.toString() : "0"
+
+            List<String> rowClasses = ["device-section"]
+            if (hasSecondaryRow) {
+                rowClasses << "schedule-group-primary"
+            }
+            String rowClassAttr = rowClasses ? " class='${rowClasses.join(' ')}'" : ""
+            str += "<tr${rowClassAttr}>"
+
+            if (firstScheduleRow) {
+                str += zoneCell + deviceCell + statusCell + capabilityCell + addNewCell
+            }
+
+            String startTime
             if (schedule.sunTime) {
                 startTime = thisStartTime
             } else if (schedule.useVariableTime) {
@@ -1053,6 +1227,10 @@ String displayTable() {
                 }
             } else {
                 startTime = buttonLink("editStartTime|$deviceAndScheduleId", thisStartTime, "MediumBlue")
+            }
+
+            if (hasSecondaryRow) {
+                startTime = "<div class='schedule-time-wrapper'><span class='schedule-badge'>Primary</span>${startTime}</div>"
             }
 
             String sunCheckBoxT = (schedule.sun) ? buttonLink("sunUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("sunChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
@@ -1072,11 +1250,12 @@ String displayTable() {
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
             // Handle button device specifics
-            if (state.devices["$dev.id"].capability == "Button") {
-                if (schedule.buttonNumber == null) {
-                    schedule.buttonNumber = 1 // Default to button 1 if not set
+                if (state.devices["$dev.id"].capability == "Button") {
+                 str += "<td $td_border_bottom>-</td>"
+                } else {
+                    def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
+                 str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
                 }
-
                 // For button devices, show button config instead of desired state
                 def buttonCount = dev.currentValue("numberOfButtons") ?: 1
                 def buttonNum = schedule.buttonNumber ?: 1
@@ -1087,7 +1266,7 @@ String displayTable() {
                 def actionVal = schedule.buttonAction ?: actions[0]
                 def actionOptions = actions.collect { a -> "<option value='${a}' ${a==actionVal?'selected':''}>${a}</option>" }.join('')
                 def actionSelect = "<select id='buttonAction|${deviceAndScheduleId}' onchange=\"buttonActionChange('${dev.id}','${scheduleId}',this.value)\">${actionOptions}</select>"
-                
+
                 desiredStateButton = "${actionSelect}<br>${buttonSelect}"
                 desiredLevelButton = ""
             } else {
@@ -1095,7 +1274,6 @@ String displayTable() {
                 desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
             }
 
-            def td_border_bottom = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
             if (schedule.sunTime) {
                 str += "<td $td_border_bottom id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
                         "<td $td_border_bottom>Using Sun<br>Time</td>"
@@ -1113,11 +1291,22 @@ String displayTable() {
             } else {
                 str += "<td $td_border_bottom title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
                 if (schedule.sunTime) {
-                    str += "<td $td_border_bottom title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
+                str += "<td $td_border_bottom title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
                             "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
                 } else {
-                    str += "<td $td_border_bottom colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                str += "<td $td_border_bottom colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
                 }
+            }
+
+            if (dualTimeBool) {
+                String selectionText = schedule.earlierLater ?: "Select"
+                if (selectionText == "-") {
+                    selectionText = "Select"
+                }
+                String displayText = selectionText in ["Select"] ? "Select" : selectionText.capitalize()
+                String toggleColor = selectionText == "Select" ? "#757575" : "#2196F3"
+                String earlierLaterButton = buttonLink("toggleEarlierLater|$deviceAndScheduleId", displayText, toggleColor)
+                str += "<td $td_border_bottom title='Choose which configured time should run'>$earlierLaterButton</td>"
             }
 
              str += "<td $td_border_bottom title='Check Box to select Day'>$sunCheckBoxT</td>" +
@@ -1130,7 +1319,6 @@ String displayTable() {
                     "<td $td_border_bottom title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
                     "<td $td_border_bottom title='${state.devices["$dev.id"].capability == "Button" ? "Button Configuration" : "Click to change desired state"}'>$desiredStateButton</td>"
 
-            def td_borders = (num_schedules == 0 && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
             if (state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off")) {
                 str += "<td $td_borders>-</td>"
             } else {
@@ -1145,14 +1333,95 @@ String displayTable() {
                 }
 
                 if (state.devices["$dev.id"].capability == "Button") {
-                    str += "<td $td_border_bottom>-</td>"
+                 str += "<td $td_border_bottom>-</td>"
                 } else {
                     def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
-                    str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
+                 str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
                 }
             }
 
             str += "</tr>"
+            rowsRemaining -= 1
+            firstScheduleRow = false
+
+            if (hasSecondaryRow) {
+                def secondary = ensureSecondaryTimeConfig(schedule)
+                boolean secondaryIsLast = (rowsRemaining == 1)
+                def secondaryBorder = (secondaryIsLast && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
+                def secondaryRightBorder = (secondaryIsLast && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+
+                String secondaryStartTime = getTimeFromDateTimeString(secondary.startTime)
+                String secondaryOffsetValue = (secondary.offset != null) ? secondary.offset.toString() : "0"
+
+                String secondaryUseVariableButton = (secondary.useVariableTime) ? buttonLink("useVariableTimeSecondaryUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "purple", "23px") : buttonLink("useVariableTimeSecondaryChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
+                String secondarySunTimeButton = (secondary.sunTime) ? buttonLink("sunTimeSecondaryUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "purple", "23px") : buttonLink("sunTimeSecondaryChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
+                String secondarySunsetButton = (secondary.sunset) ? buttonLink("sunsetSecondaryUnChecked|$deviceAndScheduleId", "<iconify-icon icon=ph:moon-stars-duotone></iconify-icon>", "DodgerBlue", "23px") : buttonLink("sunsetSecondaryChecked|$deviceAndScheduleId", "<iconify-icon icon='ph:sun-duotone'></iconify-icon>", "orange", "23px")
+                String secondaryOffsetButton = buttonLink("newOffset|$deviceAndScheduleId|secondary", secondaryOffsetValue, "MediumBlue")
+
+                String secondaryStartDisplay
+                if (secondary.sunTime) {
+                    secondaryStartDisplay = secondaryStartTime
+                } else if (secondary.useVariableTime) {
+                    if (secondary.variableTime) {
+                        def variableValue = getValueForHubVariable(secondary.variableTime)
+                        if (variableValue == null) {
+                            secondaryStartDisplay = buttonLink("selectVariableStartTime|$deviceAndScheduleId|secondary", "Select Variable", "MediumBlue")
+                        } else {
+                            secondaryStartDisplay = buttonLink("selectVariableStartTime|$deviceAndScheduleId|secondary", formatHubVariableNameWithTime(secondary.variableTime, secondary.startTime), "MediumBlue")
+                        }
+                    } else {
+                        secondaryStartDisplay = buttonLink("selectVariableStartTime|$deviceAndScheduleId|secondary", "Select<br>Variable", "MediumBlue")
+                    }
+                } else {
+                    secondaryStartDisplay = buttonLink("editStartTime|$deviceAndScheduleId|secondary", secondaryStartTime, "MediumBlue")
+                }
+
+                secondaryStartDisplay = "<div class='schedule-time-wrapper'><span class='schedule-badge schedule-badge-secondary'>Secondary</span>${secondaryStartDisplay}</div>"
+
+                str += "<tr class='device-section schedule-group-secondary'>"
+                if (secondary.sunTime) {
+              str += "<td $secondaryBorder id='editStartTime|${deviceAndScheduleId}|secondary' title='Start Time with Sunset or Sunrise +/- offset'>$secondaryStartDisplay</td>" +
+                            "<td $secondaryBorder>Using Sun<br>Time</td>"
+                } else if (secondary.useVariableTime) {
+              str += "<td $secondaryBorder title='Select Hub Variable'>$secondaryStartDisplay</td>" +
+                            "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
+                } else {
+              str += "<td $secondaryBorder style='font-weight:bold !important' title='${secondaryStartTime ? "Click to Change Start Time" : "Select"}'>$secondaryStartDisplay</td>" +
+                            "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
+                }
+
+                if (secondary.useVariableTime) {
+              str += "<td $secondaryBorder colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                           "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
+                } else {
+              str += "<td $secondaryBorder title='Use Sunrise or Sunset for Start time'>$secondarySunTimeButton</td>"
+                    if (secondary.sunTime) {
+                  str += "<td $secondaryBorder title='Sunset start (moon), otherwise Sunrise start(sun)'>$secondarySunsetButton</td>" +
+                                "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
+                    } else {
+                  str += "<td $secondaryBorder colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                    }
+                }
+
+                if (dualTimeBool) {
+              str += "<td $secondaryBorder></td>"
+                }
+
+                // Blank out remaining columns for the secondary row
+                7.times { str += "<td $secondaryBorder></td>" }
+                str += "<td $secondaryBorder></td>" // Pause
+                str += "<td $secondaryBorder></td>" // Desired state
+                str += "<td $secondaryRightBorder></td>" // Desired level
+                str += "<td $secondaryBorder></td>" // Remove run
+
+                if (restoreAfterBootBool) {
+              str += "<td $secondaryBorder></td>"
+                }
+
+                str += "</tr>"
+                rowsRemaining -= 1
+            }
+        }
         }
     }
     str += "</table></div>"
@@ -1179,9 +1448,10 @@ void switchHandler(data) {
         if ((switchActivationBool && activationSwitch.currentSwitch == activationSwitchOnOff) || (!switchActivationBool)) {
             if (!schedule.pause) { // If schedule is paused it should never be scheduled anyway. We'll still check.
                 // Check to make sure the date is correct if we're using Hub Variables
+                def effectiveConfig = getEffectiveTimeConfig(schedule).config
                 def validDate = true
-                if (schedule.useVariableTime && schedule.variableTime != null) {
-                    def dateStr = getDateFromDateTimeString(schedule.startTime)
+                if (effectiveConfig.useVariableTime && effectiveConfig.variableTime != null) {
+                    def dateStr = getDateFromDateTimeString(effectiveConfig.startTime)
                     if (!dateStr.equals("9999-99-99")){ // this indicates the Hub Variable is only a time, not datetime
                         def parsedDate = Date.parse('yyyy-MM-dd', dateStr).clearTime()
                         validDate = new Date().clearTime() == parsedDate
@@ -1265,6 +1535,13 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("sunTimeChecked|")) state.sunTimeCheckedBox = btn.minus("sunTimeChecked|")
     else if (btn.startsWith("sunsetUnChecked|")) state.sunsetUnCheckedBox = btn.minus("sunsetUnChecked|")
     else if (btn.startsWith("sunsetChecked|")) state.sunsetCheckedBox = btn.minus("sunsetChecked|")
+    else if (btn.startsWith("toggleEarlierLater|")) state.toggleEarlierLater = btn.minus("toggleEarlierLater|")
+    else if (btn.startsWith("sunTimeSecondaryUnChecked|")) state.sunTimeSecondaryUnChecked = btn.minus("sunTimeSecondaryUnChecked|")
+    else if (btn.startsWith("sunTimeSecondaryChecked|")) state.sunTimeSecondaryChecked = btn.minus("sunTimeSecondaryChecked|")
+    else if (btn.startsWith("sunsetSecondaryUnChecked|")) state.sunsetSecondaryUnChecked = btn.minus("sunsetSecondaryUnChecked|")
+    else if (btn.startsWith("sunsetSecondaryChecked|")) state.sunsetSecondaryChecked = btn.minus("sunsetSecondaryChecked|")
+    else if (btn.startsWith("useVariableTimeSecondaryUnChecked|")) state.useVariableTimeSecondaryUnChecked = btn.minus("useVariableTimeSecondaryUnChecked|")
+    else if (btn.startsWith("useVariableTimeSecondaryChecked|")) state.useVariableTimeSecondaryChecked = btn.minus("useVariableTimeSecondaryChecked|")
     else if (btn.startsWith("addNew|")) state.addRunTime = btn.minus("addNew|")
     else if (btn.startsWith("removeRunTime|")) state.removeRunTime = btn.minus("removeRunTime|")
     else if (btn.startsWith("setCapabilityDimmer|")) state.setCapabilityDimmer = btn.minus("setCapabilityDimmer|")
@@ -1289,6 +1566,17 @@ def updateSunriseAndSet() {
                     schedule.startTime = offsetRiseAndSet.sunset.toString()
                 } else {
                     schedule.startTime = offsetRiseAndSet.sunrise.toString()
+                }
+            }
+
+            def secondary = ensureSecondaryTimeConfig(schedule)
+            if (secondary.sunTime) {
+                logDebug "Updating Secondary Sunrise/Sunset for Device: $dev; Schedule: $scheduleId, Offset: ${secondary.offset}"
+                def secondaryRiseAndSet = getSunriseAndSunset(sunriseOffset: secondary.offset, sunsetOffset: secondary.offset)
+                if (secondary.sunset) {
+                    secondary.startTime = secondaryRiseAndSet.sunset.toString()
+                } else {
+                    secondary.startTime = secondaryRiseAndSet.sunrise.toString()
                 }
             }
         }
@@ -1326,6 +1614,29 @@ def updateVariableTimes() {
                     schedule.startTime = startTime
                 }
             }
+
+            def secondary = ensureSecondaryTimeConfig(schedule)
+            if (secondary.useVariableTime && secondary.variableTime) {
+                def varTime = getGlobalVar(secondary.variableTime)
+                if (varTime != null) {
+                    def startTime = varTime.value.replace("99:99:99.999-9999", "00:00:00.000" + new Date().format("XX"))
+                    if (secondary.offset && secondary.offset != 0) {
+                        dateStr = getDateFromDateTimeString(startTime)
+                        def formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+                        def date = ZonedDateTime.parse(startTime.replace("9999-99-99", "2000-01-01"), formatter)
+                        date = date.plusMinutes(secondary.offset)
+
+                        if (dateStr.equals("9999-99-99")) {
+                            formatter = DateTimeFormatter.ofPattern("'9999-99-99T'HH:mm:ss.SSSXX")
+                            startTime = date.format(formatter)
+                        } else {
+                            formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSXX")
+                            startTime = date.format(formatter)
+                        }
+                    }
+                    secondary.startTime = startTime
+                }
+            }
         }
     }
 }
@@ -1335,10 +1646,11 @@ def buildCron() {
 
     state.devices.each { deviceId, deviceConfigs ->
         deviceConfigs.schedules.each { scheduleId, schedule ->
-            if (schedule.startTime) {
-                String formattedTime = getTimeFromDateTimeString(schedule.startTime)
-                String hours = formattedTime.substring(0, formattedTime.length() - 3) // Chop off the last 3 in string
-                String minutes = formattedTime.substring(3) // Chop off the first 3 in string
+            def timeConfig = getEffectiveTimeConfig(schedule).config
+            if (timeConfig?.startTime) {
+                String formattedTime = getTimeFromDateTimeString(timeConfig.startTime)
+                String hours = formattedTime.substring(0, formattedTime.length() - 3)
+                String minutes = formattedTime.substring(3)
 
                 String days = ""
                 if (schedule.sun) days = "SUN,"
@@ -1350,7 +1662,7 @@ def buildCron() {
                 if (schedule.sat) days += "SAT,"
 
                 if (days != "") {
-                    days = days.substring(0, days.length() - 1) // Chop off last ","
+                    days = days.substring(0, days.length() - 1)
                     schedule.days = days
                     schedule.cron = "0 ${minutes} ${hours} ? * ${days} *"
                     logDebug "deviceId: $deviceId; scheduleId: $scheduleId; Generated cron: ${schedule.cron}"
@@ -1537,6 +1849,10 @@ private formatHubVariableNameWithTime(hubVariable, startTime) {
 }
 
 private parseDateTime (String dateStr) {
+    if (!dateStr) {
+        return null
+    }
+
     if (dateStr == "00000000000Select000000000000") {
         return null
     }
@@ -1578,9 +1894,15 @@ def getFormat(type, myText = "") {
 
 // Helper to generate & format a button
 String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15px") {
-    def (action, deviceId, scheduleId) = btnName.tokenize('|')
+    def tokens = btnName.tokenize('|')
+    def action = tokens ? tokens[0] : null
+    def deviceId = tokens.size() > 1 ? tokens[1] : null
+    def scheduleId = tokens.size() > 2 ? tokens[2] : null
+    def extra = tokens.size() > 3 ? tokens[3] : null
+
     if (["editStartTime", "newOffset", "desiredLevel", "selectVariableStartTime"].contains(action)) {
-        return """<button type="button" name="${btnName}" id="${btnName}" title="Button" onClick='${action}Popup("${deviceId}", "${scheduleId}", "${linkText}")' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block;background:none;border:none'>${linkText}</button>"""
+        String extraParam = extra ? ", \"${extra}\"" : ""
+        return """<button type="button" name="${btnName}" id="${btnName}" title="Button" onClick='${action}Popup("${deviceId}","${scheduleId}", "${linkText}"${extraParam})' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block;background:none;border:none'>${linkText}</button>"""
     }
     return """<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"""
 }
@@ -1608,8 +1930,78 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             variableTime   : null,
             buttonNumber   : null,
             buttonAction   : null,
-            restore        : true
+            restore        : true,
+            earlierLater   : "Select",
+            secondaryTime  : generateDefaultSecondaryTime()
     ]
+}
+
+static LinkedHashMap<String, Object> generateDefaultSecondaryTime() {
+    return [
+            sunTime        : false,
+            sunset         : true,
+            offset         : 0,
+            startTime      : "00000000000Select000000000000",
+            useVariableTime: false,
+            variableTime   : null
+    ]
+}
+
+private Map ensureSecondaryTimeConfig(Map schedule) {
+    if (!schedule.secondaryTime) {
+        schedule.secondaryTime = generateDefaultSecondaryTime()
+    } else {
+        if (!schedule.secondaryTime.containsKey('sunTime')) schedule.secondaryTime.sunTime = false
+        if (!schedule.secondaryTime.containsKey('sunset')) schedule.secondaryTime.sunset = true
+        if (!schedule.secondaryTime.containsKey('offset') || schedule.secondaryTime.offset == null) schedule.secondaryTime.offset = 0
+        if (!schedule.secondaryTime.containsKey('startTime') || schedule.secondaryTime.startTime == null) schedule.secondaryTime.startTime = "00000000000Select000000000000"
+        if (!schedule.secondaryTime.containsKey('useVariableTime')) schedule.secondaryTime.useVariableTime = false
+        if (!schedule.secondaryTime.containsKey('variableTime')) schedule.secondaryTime.variableTime = null
+    }
+    return schedule.secondaryTime
+}
+
+private Map getEffectiveTimeConfig(Map schedule) {
+    Map primary = [
+            startTime      : schedule.startTime,
+            useVariableTime: schedule.useVariableTime,
+            variableTime   : schedule.variableTime,
+            sunTime        : schedule.sunTime,
+            sunset         : schedule.sunset,
+            offset         : schedule.offset
+    ]
+
+    Map secondary = ensureSecondaryTimeConfig(schedule)
+    String selection = schedule.earlierLater ?: "Select"
+    if (selection == "-") {
+        selection = "Select"
+    }
+
+    if (!dualTimeBool || !["earlier", "later"].contains(selection)) {
+        return [config: primary, isSecondary: false]
+    }
+
+    def primaryDate = parseDateTime(primary.startTime)
+    def secondaryDate = parseDateTime(secondary.startTime)
+
+    if (!primaryDate && !secondaryDate) {
+        return [config: primary, isSecondary: false]
+    }
+    if (!primaryDate) {
+        return [config: secondary, isSecondary: true]
+    }
+    if (!secondaryDate) {
+        return [config: primary, isSecondary: false]
+    }
+
+    boolean chooseSecondary = false
+    if (selection == "earlier") {
+        chooseSecondary = secondaryDate.before(primaryDate)
+    } else if (selection == "later") {
+        chooseSecondary = secondaryDate.after(primaryDate)
+    }
+
+    return chooseSecondary ? [config: secondary, isSecondary: true] : [config: primary, isSecondary: false]
 }
 
 def displayTitle() {
@@ -1708,6 +2100,17 @@ void initialize() {
                             subscribe(location, "variable:${sched.variableTime}", "variableChangeHandler")
                             logDebug "Subscribed to Hub Variable Change events for variable: ${sched.variableTime}"
                         }
+
+                        def secondary = ensureSecondaryTimeConfig(sched)
+                        if (secondary.useVariableTime && secondary.variableTime != null) {
+                            if (!(sched.useVariableTime && sched.variableTime == secondary.variableTime)) {
+                                addInUseGlobalVar(secondary.variableTime)
+                                subscribe(location, "variable:${secondary.variableTime}", "variableChangeHandler")
+                                logDebug "Subscribed to Hub Variable Change events for secondary variable: ${secondary.variableTime}"
+                            } else {
+                                logDebug "Secondary schedule uses same Hub Variable as primary; existing subscription reused for ${secondary.variableTime}"
+                            }
+                        }
                     }
                 }
             }
@@ -1763,7 +2166,7 @@ private Set<String> getScheduledTimesForConflictCheck() {
                 }
 
                 if (!added) {
-                    String startTime = schedule.startTime
+                    String startTime = getEffectiveTimeConfig(schedule).config.startTime
                     if (startTime && startTime.contains('T')) {
                         try {
                             String time = getTimeFromDateTimeString(startTime)
@@ -1787,17 +2190,23 @@ def renameVariable(oldName, newName) {
     logDebug "renameVariable called - old: $oldName, new: $newName"
     if (devices != null) {
         devices.each { dev ->
-            deviceConfig = state.devices["$dev.id"]
-            if (deviceConfig != null) { // Can happen when adding a new device that doesn't yet have a default config
-                zone = deviceConfig.zone
-                deviceConfig.schedules.each { scheduleId, sched ->
-                    if (sched != null && sched.variableTime != null && sched.variableTime.equals(oldName)) {
-                        sched.variableTime = newName
+                deviceConfig = state.devices["$dev.id"]
+                if (deviceConfig != null) { // Can happen when adding a new device that doesn't yet have a default config
+                    zone = deviceConfig.zone
+                    deviceConfig.schedules.each { scheduleId, sched ->
+                        if (sched != null) {
+                            if (sched.variableTime != null && sched.variableTime.equals(oldName)) {
+                                sched.variableTime = newName
+                            }
+                            def secondary = ensureSecondaryTimeConfig(sched)
+                            if (secondary.variableTime != null && secondary.variableTime.equals(oldName)) {
+                                secondary.variableTime = newName
+                            }
+                        }
                     }
                 }
             }
         }
-    }
 }
 
 def updated() {  // runs every 'Done' on already installed app

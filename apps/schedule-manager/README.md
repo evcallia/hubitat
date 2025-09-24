@@ -55,6 +55,7 @@ Advanced Options
 4. [Optional] Pause all schedule
 5. [Optional] Restore device settings to latest schedule when hub reboots
    - When enabled, may be configured on a per-schedule basis
+6. [Optional] Enable dual times to run at the earlier or later value per schedule
 
 ![example-setup.png](./example-setup.png)
 
