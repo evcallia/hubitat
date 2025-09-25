@@ -1140,9 +1140,9 @@ String displayTable() {
 
         String statusCell
         if (dev.currentSwitch) {
-            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == \"on\" ? \"#4CAF50\" : \"#F44336\"};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == \"on\" ? \"circle\" : \"do-not-disturb-on-outline\"}'></iconify-icon></td>"
+            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == 'on' ? 'circle' : 'do-not-disturb-on-outline'}'></iconify-icon></td>"
         } else if (dev.currentValve) {
-            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == \"open\" ? \"#4CAF50\" : \"#F44336\"};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == 'open' ? '#4CAF50' : '#F44336'};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         } else {
             statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount'></td>"
         }
@@ -1162,9 +1162,9 @@ String displayTable() {
         if (supportedCapabilities.size() > 1) {
             int nextIndex = (supportedCapabilities.indexOf(state.devices["$dev.id"].capability) + 1) % supportedCapabilities.size()
             def capabilityButton = buttonLink("setCapability${supportedCapabilities[nextIndex]}|${dev.id}", state.devices[dev.id].capability, "#2196F3")
-            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices[\"$dev.id\"].capability}'>$capabilityButton</td>"
+            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices["$dev.id"].capability}'>$capabilityButton</td>"
         } else {
-            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices[\"$dev.id\"].capability}'>${state.devices[\"$dev.id\"].capability}</td>"
+            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices["$dev.id"].capability}'>${state.devices["$dev.id"].capability}</td>"
         }
 
         String addNewCell = "<td $prominentBorders rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
