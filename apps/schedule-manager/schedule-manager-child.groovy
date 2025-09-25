@@ -950,15 +950,17 @@ String displayTable() {
     if (state.toggleEarlierLater) {
         def (deviceId, scheduleId) = state.toggleEarlierLater.tokenize('|')
         def schedule = state.devices[deviceId].schedules[scheduleId]
-        def current = schedule.earlierLater ?: "Select"
-        if (current == "-") {
-            current = "Select"
-        }
-        def nextValue = "Select"
+        def current = schedule.earlierLater ?: "-"
         if (current == "Select") {
+            current = "-"
+        }
+        String nextValue
+        if (current == "-") {
             nextValue = "earlier"
         } else if (current == "earlier") {
             nextValue = "later"
+        } else {
+            nextValue = "-"
         }
         schedule.earlierLater = nextValue
         ensureSecondaryTimeConfig(schedule)
@@ -1116,8 +1118,8 @@ String displayTable() {
         def deviceSchedules = state.devices["$dev.id"].schedules
 
         deviceSchedules.each { entry ->
-            if (!entry.value.earlierLater || entry.value.earlierLater == "-") {
-                entry.value.earlierLater = "Select"
+            if (!entry.value.earlierLater || entry.value.earlierLater == "Select") {
+                entry.value.earlierLater = "-"
             }
             ensureSecondaryTimeConfig(entry.value)
         }
@@ -1299,12 +1301,12 @@ String displayTable() {
             }
 
             if (dualTimeBool) {
-                String selectionText = schedule.earlierLater ?: "Select"
-                if (selectionText == "-") {
-                    selectionText = "Select"
+                String selectionText = schedule.earlierLater ?: "-"
+                if (selectionText == "Select") {
+                    selectionText = "-"
                 }
-                String displayText = selectionText in ["Select"] ? "Select" : selectionText.capitalize()
-                String toggleColor = selectionText == "Select" ? "#757575" : "#2196F3"
+                String displayText = selectionText
+                String toggleColor = selectionText == "-" ? "#757575" : "#2196F3"
                 String earlierLaterButton = buttonLink("toggleEarlierLater|$deviceAndScheduleId", displayText, toggleColor)
                 str += "<td $td_border_bottom title='Choose which configured time should run'>$earlierLaterButton</td>"
             }
@@ -1931,7 +1933,7 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             buttonNumber   : null,
             buttonAction   : null,
             restore        : true,
-            earlierLater   : "Select",
+            earlierLater   : "-",
             secondaryTime  : generateDefaultSecondaryTime()
     ]
 }
@@ -1972,9 +1974,9 @@ private Map getEffectiveTimeConfig(Map schedule) {
     ]
 
     Map secondary = ensureSecondaryTimeConfig(schedule)
-    String selection = schedule.earlierLater ?: "Select"
-    if (selection == "-") {
-        selection = "Select"
+    String selection = schedule.earlierLater ?: "-"
+    if (selection == "Select") {
+        selection = "-"
     }
 
     if (!dualTimeBool || !["earlier", "later"].contains(selection)) {
