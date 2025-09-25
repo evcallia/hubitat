@@ -950,17 +950,17 @@ String displayTable() {
     if (state.toggleEarlierLater) {
         def (deviceId, scheduleId) = state.toggleEarlierLater.tokenize('|')
         def schedule = state.devices[deviceId].schedules[scheduleId]
-        def current = schedule.earlierLater ?: "-"
-        if (current == "Select") {
-            current = "-"
+        def current = (schedule.earlierLater ?: "select").toString().toLowerCase()
+        if (current == "-") {
+            current = "select"
         }
         String nextValue
-        if (current == "-") {
+        if (current == "select") {
             nextValue = "earlier"
         } else if (current == "earlier") {
             nextValue = "later"
         } else {
-            nextValue = "-"
+            nextValue = "select"
         }
         schedule.earlierLater = nextValue
         ensureSecondaryTimeConfig(schedule)
@@ -1118,8 +1118,10 @@ String displayTable() {
         def deviceSchedules = state.devices["$dev.id"].schedules
 
         deviceSchedules.each { entry ->
-            if (!entry.value.earlierLater || entry.value.earlierLater == "Select") {
-                entry.value.earlierLater = "-"
+            if (!entry.value.earlierLater || entry.value.earlierLater == "-") {
+                entry.value.earlierLater = "select"
+            } else {
+                entry.value.earlierLater = entry.value.earlierLater.toString().toLowerCase()
             }
             ensureSecondaryTimeConfig(entry.value)
         }
@@ -1232,7 +1234,7 @@ String displayTable() {
             }
 
             if (hasSecondaryRow) {
-                startTime = "<div class='schedule-time-wrapper'><span class='schedule-badge'>Primary</span>${startTime}</div>"
+                startTime = "<div class='schedule-time-wrapper'><span class='schedule-badge'>Time 1</span>${startTime}</div>"
             }
 
             String sunCheckBoxT = (schedule.sun) ? buttonLink("sunUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("sunChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
@@ -1295,12 +1297,12 @@ String displayTable() {
             }
 
             if (dualTimeBool) {
-                String selectionText = schedule.earlierLater ?: "-"
-                if (selectionText == "Select") {
-                    selectionText = "-"
+                String selectionText = (schedule.earlierLater ?: "select").toString().toLowerCase()
+                if (selectionText == "-") {
+                    selectionText = "select"
                 }
                 String displayText = selectionText
-                String toggleColor = selectionText == "-" ? "#757575" : "#2196F3"
+                String toggleColor = selectionText == "select" ? "#757575" : "#2196F3"
                 String earlierLaterButton = buttonLink("toggleEarlierLater|$deviceAndScheduleId", displayText, toggleColor)
                 str += "<td $td_border_bottom title='Choose which configured time should run'>$earlierLaterButton</td>"
             }
@@ -1372,7 +1374,7 @@ String displayTable() {
                     secondaryStartDisplay = buttonLink("editStartTime|$deviceAndScheduleId|secondary", secondaryStartTime, "MediumBlue")
                 }
 
-                secondaryStartDisplay = "<div class='schedule-time-wrapper'><span class='schedule-badge schedule-badge-secondary'>Secondary</span>${secondaryStartDisplay}</div>"
+                secondaryStartDisplay = "<div class='schedule-time-wrapper'><span class='schedule-badge schedule-badge-secondary'>Time 2</span>${secondaryStartDisplay}</div>"
 
                 str += "<tr class='device-section schedule-group-secondary'>"
                 if (secondary.sunTime) {
@@ -1926,7 +1928,7 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             buttonNumber   : null,
             buttonAction   : null,
             restore        : true,
-            earlierLater   : "-",
+            earlierLater   : "select",
             secondaryTime  : generateDefaultSecondaryTime()
     ]
 }
@@ -1967,9 +1969,9 @@ private Map getEffectiveTimeConfig(Map schedule) {
     ]
 
     Map secondary = ensureSecondaryTimeConfig(schedule)
-    String selection = schedule.earlierLater ?: "-"
-    if (selection == "Select") {
-        selection = "-"
+    String selection = (schedule.earlierLater ?: "select").toString().toLowerCase()
+    if (selection == "-") {
+        selection = "select"
     }
 
     if (!dualTimeBool || !["earlier", "later"].contains(selection)) {
