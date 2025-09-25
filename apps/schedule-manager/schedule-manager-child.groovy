@@ -1252,13 +1252,7 @@ String displayTable() {
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
 
             // Handle button device specifics
-                if (state.devices["$dev.id"].capability == "Button") {
-                 str += "<td $td_border_bottom>-</td>"
-                } else {
-                    def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
-                 str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
-                }
-                // For button devices, show button config instead of desired state
+            if (state.devices["$dev.id"].capability == "Button") {
                 def buttonCount = dev.currentValue("numberOfButtons") ?: 1
                 def buttonNum = schedule.buttonNumber ?: 1
                 def buttonOptions = (1..buttonCount).collect { n -> "<option value='${n}' ${n==buttonNum?'selected':''}>button ${n}</option>" }.join('')
@@ -1335,10 +1329,10 @@ String displayTable() {
                 }
 
                 if (state.devices["$dev.id"].capability == "Button") {
-                 str += "<td $td_border_bottom>-</td>"
+                    str += "<td $td_border_bottom>-</td>"
                 } else {
                     def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
-                 str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
+                    str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
                 }
             }
 
@@ -1382,31 +1376,31 @@ String displayTable() {
 
                 str += "<tr class='device-section schedule-group-secondary'>"
                 if (secondary.sunTime) {
-              str += "<td $secondaryBorder id='editStartTime|${deviceAndScheduleId}|secondary' title='Start Time with Sunset or Sunrise +/- offset'>$secondaryStartDisplay</td>" +
-                            "<td $secondaryBorder>Using Sun<br>Time</td>"
+                    str += "<td $secondaryBorder id='editStartTime|${deviceAndScheduleId}|secondary' title='Start Time with Sunset or Sunrise +/- offset'>$secondaryStartDisplay</td>" +
+                           "<td $secondaryBorder>Using Sun<br>Time</td>"
                 } else if (secondary.useVariableTime) {
-              str += "<td $secondaryBorder title='Select Hub Variable'>$secondaryStartDisplay</td>" +
-                            "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
+                    str += "<td $secondaryBorder title='Select Hub Variable'>$secondaryStartDisplay</td>" +
+                           "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
                 } else {
-              str += "<td $secondaryBorder style='font-weight:bold !important' title='${secondaryStartTime ? "Click to Change Start Time" : "Select"}'>$secondaryStartDisplay</td>" +
-                            "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
+                    str += "<td $secondaryBorder style='font-weight:bold !important' title='${secondaryStartTime ? "Click to Change Start Time" : "Select"}'>$secondaryStartDisplay</td>" +
+                           "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
                 }
 
                 if (secondary.useVariableTime) {
-              str += "<td $secondaryBorder colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                    str += "<td $secondaryBorder colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
                            "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
                 } else {
-              str += "<td $secondaryBorder title='Use Sunrise or Sunset for Start time'>$secondarySunTimeButton</td>"
+                    str += "<td $secondaryBorder title='Use Sunrise or Sunset for Start time'>$secondarySunTimeButton</td>"
                     if (secondary.sunTime) {
-                  str += "<td $secondaryBorder title='Sunset start (moon), otherwise Sunrise start(sun)'>$secondarySunsetButton</td>" +
-                                "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
+                        str += "<td $secondaryBorder title='Sunset start (moon), otherwise Sunrise start(sun)'>$secondarySunsetButton</td>" +
+                               "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
                     } else {
-                  str += "<td $secondaryBorder colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                        str += "<td $secondaryBorder colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
                     }
                 }
 
                 if (dualTimeBool) {
-              str += "<td $secondaryBorder></td>"
+                    str += "<td $secondaryBorder></td>"
                 }
 
                 // Blank out remaining columns for the secondary row
@@ -1417,7 +1411,7 @@ String displayTable() {
                 str += "<td $secondaryBorder></td>" // Remove run
 
                 if (restoreAfterBootBool) {
-              str += "<td $secondaryBorder></td>"
+                    str += "<td $secondaryBorder></td>"
                 }
 
                 str += "</tr>"
