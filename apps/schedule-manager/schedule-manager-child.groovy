@@ -406,6 +406,9 @@ String loadCSS() {
                 border-bottom: 1px solid #EEEEEE;
                 border-right: 1px solid #EEEEEE;
             }
+            td.no-group-highlight {
+                background-color: inherit !important;
+            }
             .mdl-data-table tbody tr:hover {
                 background-color: inherit !important;
             }
@@ -420,17 +423,13 @@ String loadCSS() {
             .device-link a:hover {
                 text-decoration: underline;
             }
-            tr.schedule-group-primary td {
+            tr.schedule-group-primary td.group-highlight {
                 background-color: rgba(33, 150, 243, 0.12);
                 border-top: 2px solid rgba(33, 150, 243, 0.45) !important;
             }
-            tr.schedule-group-secondary td {
+            tr.schedule-group-secondary td.group-highlight {
                 background-color: rgba(33, 150, 243, 0.08);
                 border-bottom: 2px solid rgba(33, 150, 243, 0.45) !important;
-            }
-            tr.schedule-group-primary td:first-child,
-            tr.schedule-group-secondary td:first-child {
-                box-shadow: inset 4px 0 0 #1E88E5;
             }
             .schedule-time-wrapper {
                 display: flex;
@@ -1126,6 +1125,20 @@ String displayTable() {
         </tr></thead>
     """
 
+    def buildCellAttr = { boolean highlight, boolean includeRightBorder, boolean includeBottomBorder ->
+        List<String> classes = []
+        if (highlight) {
+            classes << "group-highlight"
+        }
+        if (includeBottomBorder) {
+            classes << "prominent-border-bottom"
+        }
+        if (includeRightBorder) {
+            classes << "prominent-border-right"
+        }
+        classes ? "class='${classes.join(' ')}'" : ""
+    }
+
     int zone = 0
     devices.sort { it.displayName.toLowerCase() }.each { dev ->
         zone += 1
@@ -1154,19 +1167,34 @@ String displayTable() {
             scheduleCount = 1
         }
 
-        def prominentBorderBottom = (zone != devices.size()) ? "class='prominent-border-bottom'" : ""
-        def prominentBorders = (zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+        List<String> spanCellClasses = ["no-group-highlight"]
+        if (zone != devices.size()) {
+            spanCellClasses << "prominent-border-bottom"
+        }
+        String spanClassAttr = "class='${spanCellClasses.join(' ')}'"
 
-        String zoneCell = "<td $prominentBorderBottom rowspan='$scheduleCount'>$thisZone</td>"
-        String deviceCell = "<td $prominentBorderBottom rowspan='$scheduleCount' class='device-link'>$deviceLink</td>"
+        List<String> deviceCellClasses = ["device-link", "no-group-highlight"]
+        if (zone != devices.size()) {
+            deviceCellClasses << "prominent-border-bottom"
+        }
+        String deviceCellClassAttr = "class='${deviceCellClasses.join(' ')}'"
+
+        List<String> addNewCellClasses = ["no-group-highlight", "prominent-border-right"]
+        if (zone != devices.size()) {
+            addNewCellClasses << "prominent-border-bottom"
+        }
+        String addNewClassAttr = "class='${addNewCellClasses.join(' ')}'"
+
+        String zoneCell = "<td ${spanClassAttr} rowspan='$scheduleCount'>$thisZone</td>"
+        String deviceCell = "<td ${deviceCellClassAttr} rowspan='$scheduleCount'>$deviceLink</td>"
 
         String statusCell
         if (dev.currentSwitch) {
-            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == 'on' ? 'circle' : 'do-not-disturb-on-outline'}'></iconify-icon></td>"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == 'on' ? 'circle' : 'do-not-disturb-on-outline'}'></iconify-icon></td>"
         } else if (dev.currentValve) {
-            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='color:${dev.currentValve == 'open' ? '#4CAF50' : '#F44336'};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' style='color:${dev.currentValve == 'open' ? '#4CAF50' : '#F44336'};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         } else {
-            statusCell = "<td $prominentBorderBottom rowspan='$scheduleCount'></td>"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount'></td>"
         }
 
         def supportedCapabilities = []
@@ -1184,12 +1212,12 @@ String displayTable() {
         if (supportedCapabilities.size() > 1) {
             int nextIndex = (supportedCapabilities.indexOf(state.devices["$dev.id"].capability) + 1) % supportedCapabilities.size()
             def capabilityButton = buttonLink("setCapability${supportedCapabilities[nextIndex]}|${dev.id}", state.devices[dev.id].capability, "#2196F3")
-            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices["$dev.id"].capability}'>$capabilityButton</td>"
+            capabilityCell = "<td ${spanClassAttr} rowspan='$scheduleCount' style='font-weight:bold' title='Capability: ${state.devices["$dev.id"].capability}'>$capabilityButton</td>"
         } else {
-            capabilityCell = "<td $prominentBorderBottom rowspan='$scheduleCount' title='Capability: ${state.devices["$dev.id"].capability}'>${state.devices["$dev.id"].capability}</td>"
+            capabilityCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='Capability: ${state.devices["$dev.id"].capability}'>${state.devices["$dev.id"].capability}</td>"
         }
 
-        String addNewCell = "<td $prominentBorders rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
+        String addNewCell = "<td ${addNewClassAttr} rowspan='$scheduleCount' title='Click to add new time for this device'>$addNewRunButton</td>"
 
         //**** Update sunrise/set & hub variable times ****//
         refreshVariables()
@@ -1224,8 +1252,9 @@ String displayTable() {
                 runsAtSecondary = effectiveInfo?.isSecondary ?: false
             }
             boolean isLastRowAfterThis = (!hasSecondaryRow && rowsRemaining == 1)
-            def td_border_bottom = (isLastRowAfterThis && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
-            def td_borders = (isLastRowAfterThis && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+            boolean addBottomBorder = (isLastRowAfterThis && zone != devices.size())
+            String tdAttr = buildCellAttr(hasSecondaryRow, false, addBottomBorder)
+            String tdAttrRight = buildCellAttr(hasSecondaryRow, true, addBottomBorder)
 
             String thisStartTime = getTimeFromDateTimeString(schedule.startTime)
             String thisOffsetTime = (schedule.offset != null) ? schedule.offset.toString() : "0"
@@ -1301,26 +1330,26 @@ String displayTable() {
             }
 
             if (schedule.sunTime) {
-                str += "<td $td_border_bottom id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
-                        "<td $td_border_bottom>Using Sun<br>Time</td>"
+                str += "<td ${tdAttr} id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
+                        "<td ${tdAttr}>Using Sun<br>Time</td>"
             } else if (schedule.useVariableTime){
-                str += "<td $td_border_bottom title='Select Hub Variable'>$startTime</td>" +
-                        "<td $td_border_bottom title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+                str += "<td ${tdAttr} title='Select Hub Variable'>$startTime</td>" +
+                        "<td ${tdAttr} title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             } else {
-                str += "<td $td_border_bottom style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
-                        "<td $td_border_bottom title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
+                str += "<td ${tdAttr} style='font-weight:bold !important' title='${thisStartTime ? "Click to Change Start Time" : "Select"}'>$startTime</td>" +
+                        "<td ${tdAttr} title='Use a hub variable'>$useVariableTimeCheckBoxT</td>"
             }
 
             if (schedule.useVariableTime) {
-                str += "<td $td_border_bottom colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
-                       "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                str += "<td ${tdAttr} colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                       "<td ${tdAttr} style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
             } else {
-                str += "<td $td_border_bottom title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
+                str += "<td ${tdAttr} title='Use Sunrise or Sunset for Start time'>$sunTimeCheckBoxT</td>"
                 if (schedule.sunTime) {
-                str += "<td $td_border_bottom title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
-                            "<td $td_border_bottom style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
+                str += "<td ${tdAttr} title='Sunset start (moon), otherwise Sunrise start(sun)'>$sunsetCheckBoxT</td>" +
+                            "<td ${tdAttr} style='font-weight:bold' title='${thisOffsetTime ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$offset</td>"
                 } else {
-                str += "<td $td_border_bottom colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                str += "<td ${tdAttr} colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
                 }
             }
 
@@ -1332,26 +1361,26 @@ String displayTable() {
                 String displayText = selectionText
                 String toggleColor = selectionText == "select" ? "#757575" : "#2196F3"
                 String earlierLaterButton = buttonLink("toggleEarlierLater|$deviceAndScheduleId", displayText, toggleColor)
-                str += "<td $td_border_bottom title='Choose which configured time should run'>$earlierLaterButton</td>"
+                str += "<td ${tdAttr} title='Choose which configured time should run'>$earlierLaterButton</td>"
             }
 
-             str += "<td $td_border_bottom title='Check Box to select Day'>$sunCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to select Day'>$monCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to select Day'>$tueCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to select Day'>$wedCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to select Day'>$thuCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to select Day'>$friCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to select Day'>$satCheckBoxT</td>" +
-                    "<td $td_border_bottom title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
-                    "<td $td_border_bottom title='${state.devices["$dev.id"].capability == "Button" ? "Button Configuration" : "Click to change desired state"}'>$desiredStateButton</td>"
+             str += "<td ${tdAttr} title='Check Box to select Day'>$sunCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to select Day'>$monCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to select Day'>$tueCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to select Day'>$wedCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to select Day'>$thuCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to select Day'>$friCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to select Day'>$satCheckBoxT</td>" +
+                    "<td ${tdAttr} title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
+                    "<td ${tdAttr} title='${state.devices["$dev.id"].capability == "Button" ? "Button Configuration" : "Click to change desired state"}'>$desiredStateButton</td>"
 
             if (state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off")) {
-                str += "<td $td_borders>-</td>"
+                str += "<td ${tdAttrRight}>-</td>"
             } else {
-                str += "<td $td_borders style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
+                str += "<td ${tdAttrRight} style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
             }
 
-            str += "<td $td_border_bottom title='Click to remove run'>$removeRunButton</td>"
+            str += "<td ${tdAttr} title='Click to remove run'>$removeRunButton</td>"
 
             if (restoreAfterBootBool) {
                 if (schedule.restore == null) {
@@ -1359,10 +1388,10 @@ String displayTable() {
                 }
 
                 if (state.devices["$dev.id"].capability == "Button") {
-                    str += "<td $td_border_bottom>-</td>"
+                    str += "<td ${tdAttr}>-</td>"
                 } else {
                     def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
-                    str += "<td $td_border_bottom title='Restore this schedule at boot'>$restoreToggle</td>"
+                    str += "<td ${tdAttr} title='Restore this schedule at boot'>$restoreToggle</td>"
                 }
             }
 
@@ -1373,8 +1402,9 @@ String displayTable() {
             if (hasSecondaryRow) {
                 def secondary = ensureSecondaryTimeConfig(schedule)
                 boolean secondaryIsLast = (rowsRemaining == 1)
-                def secondaryBorder = (secondaryIsLast && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
-                def secondaryRightBorder = (secondaryIsLast && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
+                boolean secondaryBottomBorder = (secondaryIsLast && zone != devices.size())
+                String secondaryAttr = buildCellAttr(true, false, secondaryBottomBorder)
+                String secondaryRightAttr = buildCellAttr(true, true, secondaryBottomBorder)
 
                 String secondaryStartTime = getTimeFromDateTimeString(secondary.startTime)
                 String secondaryOffsetValue = (secondary.offset != null) ? secondary.offset.toString() : "0"
@@ -1408,42 +1438,42 @@ String displayTable() {
 
                 str += "<tr class='device-section schedule-group-secondary'>"
                 if (secondary.sunTime) {
-                    str += "<td $secondaryBorder id='editStartTime|${deviceAndScheduleId}|secondary' title='Start Time with Sunset or Sunrise +/- offset'>$secondaryStartDisplay</td>" +
-                           "<td $secondaryBorder>Using Sun<br>Time</td>"
+                    str += "<td ${secondaryAttr} id='editStartTime|${deviceAndScheduleId}|secondary' title='Start Time with Sunset or Sunrise +/- offset'>$secondaryStartDisplay</td>" +
+                           "<td ${secondaryAttr}>Using Sun<br>Time</td>"
                 } else if (secondary.useVariableTime) {
-                    str += "<td $secondaryBorder title='Select Hub Variable'>$secondaryStartDisplay</td>" +
-                           "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
+                    str += "<td ${secondaryAttr} title='Select Hub Variable'>$secondaryStartDisplay</td>" +
+                           "<td ${secondaryAttr} title='Use a hub variable'>$secondaryUseVariableButton</td>"
                 } else {
-                    str += "<td $secondaryBorder style='font-weight:bold !important' title='${secondaryStartTime ? "Click to Change Start Time" : "Select"}'>$secondaryStartDisplay</td>" +
-                           "<td $secondaryBorder title='Use a hub variable'>$secondaryUseVariableButton</td>"
+                    str += "<td ${secondaryAttr} style='font-weight:bold !important' title='${secondaryStartTime ? "Click to Change Start Time" : "Select"}'>$secondaryStartDisplay</td>" +
+                           "<td ${secondaryAttr} title='Use a hub variable'>$secondaryUseVariableButton</td>"
                 }
 
                 if (secondary.useVariableTime) {
-                    str += "<td $secondaryBorder colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
-                           "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
+                    str += "<td ${secondaryAttr} colspan=2 title='Variable selected time (not sunset/sunrise)'>Hub Variable</td>" +
+                           "<td ${secondaryAttr} style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
                 } else {
-                    str += "<td $secondaryBorder title='Use Sunrise or Sunset for Start time'>$secondarySunTimeButton</td>"
+                    str += "<td ${secondaryAttr} title='Use Sunrise or Sunset for Start time'>$secondarySunTimeButton</td>"
                     if (secondary.sunTime) {
-                        str += "<td $secondaryBorder title='Sunset start (moon), otherwise Sunrise start(sun)'>$secondarySunsetButton</td>" +
-                               "<td $secondaryBorder style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
+                        str += "<td ${secondaryAttr} title='Sunset start (moon), otherwise Sunrise start(sun)'>$secondarySunsetButton</td>" +
+                               "<td ${secondaryAttr} style='font-weight:bold' title='${secondaryOffsetValue ? "Click to set +/- minutes for Sunset or Sunrise start time" : "Select"}'>$secondaryOffsetButton</td>"
                     } else {
-                        str += "<td $secondaryBorder colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
+                        str += "<td ${secondaryAttr} colspan=2 title='User Entered time (not sunset/sunrise)'>User Time</td>"
                     }
                 }
 
                 if (dualTimeBool) {
-                    str += "<td $secondaryBorder></td>"
+                    str += "<td ${secondaryAttr}></td>"
                 }
 
                 // Blank out remaining columns for the secondary row
-                7.times { str += "<td $secondaryBorder></td>" }
-                str += "<td $secondaryBorder></td>" // Pause
-                str += "<td $secondaryBorder></td>" // Desired state
-                str += "<td $secondaryRightBorder></td>" // Desired level
-                str += "<td $secondaryBorder></td>" // Remove run
+                7.times { str += "<td ${secondaryAttr}></td>" }
+                str += "<td ${secondaryAttr}></td>" // Pause
+                str += "<td ${secondaryAttr}></td>" // Desired state
+                str += "<td ${secondaryRightAttr}></td>" // Desired level
+                str += "<td ${secondaryAttr}></td>" // Remove run
 
                 if (restoreAfterBootBool) {
-                    str += "<td $secondaryBorder></td>"
+                    str += "<td ${secondaryAttr}></td>"
                 }
 
                 str += "</tr>"
