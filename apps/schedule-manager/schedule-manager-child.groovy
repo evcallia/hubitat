@@ -449,9 +449,29 @@ String loadCSS() {
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
+            .schedule-badge-active {
+                color: #1B5E20;
+                background-color: rgba(76, 175, 80, 0.25);
+            }
             .schedule-badge-secondary {
                 color: #004D40;
                 background-color: rgba(0, 77, 64, 0.18);
+            }
+            .schedule-run-indicator {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                padding: 2px 6px;
+                border-radius: 10px;
+                font-size: 10px;
+                font-weight: 600;
+                color: #1B5E20;
+                background-color: rgba(76, 175, 80, 0.2);
+                text-transform: uppercase;
+                letter-spacing: 0.4px;
+            }
+            .schedule-run-indicator iconify-icon {
+                font-size: 14px;
             }
             .mdl-cell .mdl-textfield div {
               white-space: normal !important;
@@ -1197,6 +1217,12 @@ String displayTable() {
         sortedSchedules.each { scheduleId, schedule ->
             String deviceAndScheduleId = "${dev.id}|$scheduleId"
             boolean hasSecondaryRow = dualTimeBool && ["earlier", "later"].contains(schedule.earlierLater)
+            boolean showRunIndicator = hasSecondaryRow
+            boolean runsAtSecondary = false
+            if (showRunIndicator) {
+                def effectiveInfo = getEffectiveTimeConfig(schedule)
+                runsAtSecondary = effectiveInfo?.isSecondary ?: false
+            }
             boolean isLastRowAfterThis = (!hasSecondaryRow && rowsRemaining == 1)
             def td_border_bottom = (isLastRowAfterThis && zone != devices.size()) ? "class='prominent-border-bottom'" : ""
             def td_borders = (isLastRowAfterThis && zone != devices.size()) ? "class='prominent-border-bottom prominent-border-right'" : "class='prominent-border-right'"
@@ -1234,7 +1260,9 @@ String displayTable() {
             }
 
             if (hasSecondaryRow) {
-                startTime = "<div class='schedule-time-wrapper'><span class='schedule-badge'>Time 1</span>${startTime}</div>"
+                String primaryBadgeClass = runsAtSecondary ? "schedule-badge" : "schedule-badge schedule-badge-active"
+                String primaryIndicator = (!runsAtSecondary && showRunIndicator) ? "<span class='schedule-run-indicator' title='Schedule will run at this time'><iconify-icon icon='material-symbols:schedule-rounded'></iconify-icon>Runs At</span>" : ""
+                startTime = "<div class='schedule-time-wrapper'><span class='${primaryBadgeClass}'>Time 1</span>${primaryIndicator}${startTime}</div>"
             }
 
             String sunCheckBoxT = (schedule.sun) ? buttonLink("sunUnChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("sunChecked|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
@@ -1374,7 +1402,9 @@ String displayTable() {
                     secondaryStartDisplay = buttonLink("editStartTime|$deviceAndScheduleId|secondary", secondaryStartTime, "MediumBlue")
                 }
 
-                secondaryStartDisplay = "<div class='schedule-time-wrapper'><span class='schedule-badge schedule-badge-secondary'>Time 2</span>${secondaryStartDisplay}</div>"
+                String secondaryBadgeClass = runsAtSecondary ? "schedule-badge schedule-badge-secondary schedule-badge-active" : "schedule-badge schedule-badge-secondary"
+                String secondaryIndicator = (runsAtSecondary && showRunIndicator) ? "<span class='schedule-run-indicator' title='Schedule will run at this time'><iconify-icon icon='material-symbols:schedule-rounded'></iconify-icon>Runs At</span>" : ""
+                secondaryStartDisplay = "<div class='schedule-time-wrapper'><span class='${secondaryBadgeClass}'>Time 2</span>${secondaryIndicator}${secondaryStartDisplay}</div>"
 
                 str += "<tr class='device-section schedule-group-secondary'>"
                 if (secondary.sunTime) {
