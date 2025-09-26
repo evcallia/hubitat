@@ -647,13 +647,17 @@ String loadScript() {
 
             function refreshScheduleTable() {
                 var xhr = new XMLHttpRequest();
-                xhr.open('GET', '/apps/api/${app.id}/getScheduleTable?access_token=${state.accessToken}', true);
+                var cacheBuster = new Date().getTime();
+                xhr.open('GET', '/apps/api/${app.id}/getScheduleTable?access_token=${state.accessToken}&_=' + cacheBuster, true);
                 xhr.onreadystatechange = function() {
                     if (xhr.readyState === 4) {
                         if (xhr.status === 200) {
                             var wrapper = document.getElementById('schedule-table-wrapper');
                             if (wrapper) {
                                 wrapper.innerHTML = xhr.responseText;
+                                if (window.Iconify && typeof window.Iconify.scan === 'function') {
+                                    window.Iconify.scan(wrapper);
+                                }
                             } else {
                                 window.location.reload();
                             }
