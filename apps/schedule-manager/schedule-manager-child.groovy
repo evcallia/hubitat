@@ -637,6 +637,10 @@ String loadScript() {
                 });
             }
 
+            function refreshScheduleTable() {
+                window.location.reload();
+            }
+
             // Time input popup
             function editStartTimePopup(deviceId, scheduleId, currentValue, timeType) {
                 const effectiveTimeType = timeType || null;
@@ -666,6 +670,7 @@ String loadScript() {
                                 // When successful, update the input field in the table so we don't need to page refresh
                                 const suffix = effectiveTimeType ? "|" + effectiveTimeType : "";
                                 document.getElementById("editStartTime|" + deviceId + "|" + scheduleId + suffix).innerHTML = input.value;
+                                refreshScheduleTable();
                             }
                         };
 
@@ -718,6 +723,7 @@ String loadScript() {
 
                                 document.getElementById("newOffset|" + deviceId + "|" + scheduleId + suffix).innerHTML = input.value;
                                 document.getElementById(idPrefix + deviceId + "|" + scheduleId + suffix).innerHTML = newStartTime;
+                                refreshScheduleTable();
                             }
                         };
 
@@ -812,6 +818,7 @@ String loadScript() {
                                     const suffix = responseTimeType ? "|" + responseTimeType : "";
 
                                     document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId + suffix).innerHTML = newStartTime;
+                                    refreshScheduleTable();
                                 }
                             };
 
