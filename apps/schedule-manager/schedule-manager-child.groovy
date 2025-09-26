@@ -1264,21 +1264,23 @@ String renderScheduleTableMarkup() {
         //**** Update sunrise/set & hub variable times ****//
         refreshVariables()
 
-        // order schedules so table is sorted by time
-        def sortedSchedules = deviceSchedules.sort { a, b ->
-            try {
-                def configA = getEffectiveTimeConfig(a.value).config
-                def configB = getEffectiveTimeConfig(b.value).config
-                def dateA = parseDateTime(configA.startTime ?: a.value.startTime)
-                def dateB = parseDateTime(configB.startTime ?: b.value.startTime)
-                if (dateA && dateB) {
-                    return dateA <=> dateB
-                }
-                return 0
-            } catch (Exception e) {
-                logError "Error in sorting schedule dates: ${e.message}"
-                return 0
+        // order schedules so table is sorted by time (using the effective run time)
+        Map<String, Long> sortKeyCache = [:]
+        Closure<Long> resolveSortKey = { entry ->
+            if (!sortKeyCache.containsKey(entry.key)) {
+                sortKeyCache[entry.key] = buildScheduleSortKey(entry.value)
             }
+            return sortKeyCache[entry.key]
+        }
+
+        def sortedSchedules = deviceSchedules.sort { a, b ->
+            Long keyA = resolveSortKey(a)
+            Long keyB = resolveSortKey(b)
+            int comparison = keyA <=> keyB
+            if (comparison != 0) {
+                return comparison
+            }
+            return a.key <=> b.key
         }
 
         int rowsRemaining = scheduleCount
@@ -1970,6 +1972,63 @@ private parseDateTime (String dateStr) {
             return null
         }
     }
+}
+
+private Long buildScheduleSortKey(Map schedule) {
+    if (!schedule) {
+        return Long.MAX_VALUE
+    }
+
+    try {
+        def effectiveInfo = getEffectiveTimeConfig(schedule)
+        Map config = effectiveInfo?.config ?: [:]
+
+        List<String> candidates = []
+        if (config.startTime) {
+            candidates << config.startTime.toString()
+        }
+        if (schedule.startTime) {
+            candidates << schedule.startTime.toString()
+        }
+
+        def secondary = schedule.secondaryTime
+        if (secondary instanceof Map && secondary.startTime) {
+            candidates << secondary.startTime.toString()
+        }
+
+        for (String candidate : candidates) {
+            Long minutes = extractMinutesFromStartTime(candidate)
+            if (minutes != null) {
+                return minutes
+            }
+        }
+    } catch (Exception e) {
+        logError "Error determining schedule sort key: ${e.message}"
+    }
+
+    return Long.MAX_VALUE
+}
+
+private Long extractMinutesFromStartTime(String startTime) {
+    if (!startTime) {
+        return null
+    }
+
+    def matcher = startTime =~ /(\d{1,2}):(\d{2})/
+    if (matcher.find()) {
+        Integer hours = matcher.group(1).toInteger()
+        Integer minutes = matcher.group(2).toInteger()
+        return (hours * 60L) + minutes
+    }
+
+    def parsed = parseDateTime(startTime)
+    if (parsed) {
+        Integer hours = (parsed.format("HH") as Integer)
+        Integer minutes = (parsed.format("mm") as Integer)
+        return (hours * 60L) + minutes
+    }
+
+    return null
 }
 
 private getTimeFromDateTimeString(dt) {
