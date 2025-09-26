@@ -251,6 +251,10 @@ mappings {
     path("/updateButtonConfig") {
         action: [POST: "updateButtonConfig"]
     }
+
+    path("/getScheduleTable") {
+        action: [GET: "getScheduleTable"]
+    }
 }
 
 //****  API Route Handlers ****//
@@ -365,6 +369,10 @@ def updateButtonConfig() {
         state.devices[deviceId].schedules[scheduleId].buttonAction = buttonAction
     }
     render contentType: "application/json", data: JsonOutput.toJson([success: true])
+}
+
+def getScheduleTable() {
+    render contentType: "text/html", data: renderScheduleTableMarkup()
 }
 
 //****  JS for Table  ****//
@@ -638,7 +646,24 @@ String loadScript() {
             }
 
             function refreshScheduleTable() {
-                window.location.reload();
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', '/apps/api/${app.id}/getScheduleTable?access_token=${state.accessToken}', true);
+                xhr.onreadystatechange = function() {
+                    if (xhr.readyState === 4) {
+                        if (xhr.status === 200) {
+                            var wrapper = document.getElementById('schedule-table-wrapper');
+                            if (wrapper) {
+                                wrapper.innerHTML = xhr.responseText;
+                            } else {
+                                window.location.reload();
+                            }
+                        } else {
+                            console.error('Failed to refresh schedule table', xhr.status);
+                            window.location.reload();
+                        }
+                    }
+                };
+                xhr.send();
             }
 
             // Time input popup
@@ -1094,7 +1119,13 @@ String displayTable() {
     }
 
     // Configure table
-    String str = loadCSS() + loadScript() + """
+    String tableMarkup = renderScheduleTableMarkup()
+    return loadCSS() + loadScript() + "<div id='schedule-table-wrapper'>" + tableMarkup + "</div>"
+}
+
+String renderScheduleTableMarkup() {
+    // Configure table
+    String str = """
         <div style='overflow-x:auto'><table class='mdl-data-table'>
         <thead><tr><th>#</th>
         <th>Device</th>
