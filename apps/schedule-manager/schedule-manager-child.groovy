@@ -84,6 +84,7 @@ import groovy.json.JsonOutput
 import java.time.format.DateTimeFormatter
 import java.time.LocalDate
 import java.time.ZonedDateTime
+import java.util.Calendar
 import org.quartz.CronExpression
 
 def titleVersion() {
@@ -2139,27 +2140,136 @@ private Map getEffectiveTimeConfig(Map schedule) {
         return [config: primary, isSecondary: false]
     }
 
-    def primaryDate = parseDateTime(primary.startTime)
-    def secondaryDate = parseDateTime(secondary.startTime)
+    Map primaryInfo = buildTimeComparisonInfo(primary)
+    Map secondaryInfo = buildTimeComparisonInfo(secondary)
 
-    if (!primaryDate && !secondaryDate) {
+    if (!primaryInfo.parsedDate && !secondaryInfo.parsedDate) {
         return [config: primary, isSecondary: false]
     }
-    if (!primaryDate) {
+    if (!primaryInfo.parsedDate) {
         return [config: secondary, isSecondary: true]
     }
-    if (!secondaryDate) {
+    if (!secondaryInfo.parsedDate) {
         return [config: primary, isSecondary: false]
     }
 
     boolean chooseSecondary = false
     if (selection == "earlier") {
-        chooseSecondary = secondaryDate.before(primaryDate)
+        chooseSecondary = shouldChooseSecondary(primaryInfo, secondaryInfo, true)
     } else if (selection == "later") {
-        chooseSecondary = secondaryDate.after(primaryDate)
+        chooseSecondary = shouldChooseSecondary(primaryInfo, secondaryInfo, false)
     }
 
     return chooseSecondary ? [config: secondary, isSecondary: true] : [config: primary, isSecondary: false]
+}
+
+private Map buildTimeComparisonInfo(Map config) {
+    Map result = [
+            parsedDate        : null,
+            secondsOfDay      : null,
+            isDateTimeVariable: false
+    ]
+
+    if (!config) {
+        return result
+    }
+
+    String startTime = config.startTime?.toString()
+    if (!startTime) {
+        return result
+    }
+
+    def parsed = parseDateTime(startTime)
+    if (!parsed) {
+        return result
+    }
+
+    result.parsedDate = parsed
+
+    try {
+        Integer hours = parsed.format("HH") as Integer
+        Integer minutes = parsed.format("mm") as Integer
+        Integer seconds = parsed.format("ss") as Integer
+        result.secondsOfDay = (hours * 3600L) + (minutes * 60L) + seconds
+    } catch (Exception ignored) {
+        // leave secondsOfDay as null when formatting fails
+    }
+
+    if (config.useVariableTime && config.variableTime) {
+        try {
+            String dateToken = getDateFromDateTimeString(startTime)
+            if (dateToken && dateToken != "9999-99-99") {
+                result.isDateTimeVariable = true
+            }
+        } catch (Exception ignored) {
+            // If we cannot extract the date token, default to treating it as time-only
+        }
+    }
+
+    return result
+}
+
+private boolean shouldChooseSecondary(Map primaryInfo, Map secondaryInfo, boolean chooseEarlier) {
+    Date primaryCompare
+    Date secondaryCompare
+
+    if (primaryInfo.isDateTimeVariable && secondaryInfo.isDateTimeVariable) {
+        primaryCompare = primaryInfo.parsedDate
+        secondaryCompare = secondaryInfo.parsedDate
+    } else if (primaryInfo.isDateTimeVariable) {
+        primaryCompare = primaryInfo.parsedDate
+        secondaryCompare = alignToReferenceDate(primaryCompare, secondaryInfo)
+    } else if (secondaryInfo.isDateTimeVariable) {
+        secondaryCompare = secondaryInfo.parsedDate
+        primaryCompare = alignToReferenceDate(secondaryCompare, primaryInfo)
+    }
+
+    if (primaryCompare && secondaryCompare) {
+        if (chooseEarlier) {
+            return secondaryCompare.before(primaryCompare)
+        }
+        return secondaryCompare.after(primaryCompare)
+    }
+
+    Long primarySeconds = primaryInfo.secondsOfDay as Long
+    Long secondarySeconds = secondaryInfo.secondsOfDay as Long
+
+    if (primarySeconds == null && secondarySeconds == null) {
+        return false
+    }
+    if (primarySeconds == null) {
+        return true
+    }
+    if (secondarySeconds == null) {
+        return false
+    }
+
+    if (chooseEarlier) {
+        return secondarySeconds < primarySeconds
+    }
+    return secondarySeconds > primarySeconds
+}
+
+private Date alignToReferenceDate(Date reference, Map timeInfo) {
+    if (!reference || !timeInfo) {
+        return null
+    }
+
+    Long secondsOfDay = timeInfo.secondsOfDay as Long
+    if (secondsOfDay == null) {
+        return null
+    }
+
+    Calendar cal = Calendar.getInstance()
+    cal.time = reference
+    int hours = (int) (secondsOfDay / 3600L)
+    int minutes = (int) ((secondsOfDay % 3600L) / 60L)
+    int seconds = (int) (secondsOfDay % 60L)
+    cal.set(Calendar.HOUR_OF_DAY, hours)
+    cal.set(Calendar.MINUTE, minutes)
+    cal.set(Calendar.SECOND, seconds)
+    cal.set(Calendar.MILLISECOND, 0)
+    return cal.time
 }
 
 def displayTitle() {
