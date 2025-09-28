@@ -1278,7 +1278,21 @@ String renderScheduleTableMarkup() {
 
         String statusCell
         if (dev.currentSwitch) {
-            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='Device is currently $dev.currentSwitch' style='color:${dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'};font-weight:bold;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == 'on' ? 'circle' : 'do-not-disturb-on-outline'}'></iconify-icon></td>"
+            String levelDisplay = ""
+            String levelTitleSuffix = ""
+            if (dev.capabilities.find { it.name == "SwitchLevel" }) {
+                def currentLevel = dev.currentValue("level")
+                if (currentLevel != null) {
+                    String currentLevelPercent = "${currentLevel}%"
+                    levelDisplay = "<span style='display:block;font-size:12px;font-weight:normal;margin-top:2px'>${currentLevelPercent}</span>"
+                    levelTitleSuffix = " at ${currentLevelPercent}"
+                }
+            }
+            String switchTitle = "Device is currently ${dev.currentSwitch}${levelTitleSuffix}"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${switchTitle}' style='color:${dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'};font-weight:bold;text-align:center'>" +
+                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == 'on' ? 'circle' : 'do-not-disturb-on-outline'}'></iconify-icon></span>" +
+                          levelDisplay +
+                          "</td>"
         } else if (dev.currentValve) {
             statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' style='color:${dev.currentValve == 'open' ? '#4CAF50' : '#F44336'};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
         } else {
