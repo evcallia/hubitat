@@ -1399,12 +1399,12 @@ String renderScheduleTableMarkup() {
             }
 
             if (dualTimeBool) {
-                String selectionText = (schedule.earlierLater ?: "select").toString().toLowerCase()
-                if (selectionText == "-") {
-                    selectionText = "select"
+                String selectionValue = (schedule.earlierLater ?: "select").toString().toLowerCase()
+                if (selectionValue == "-") {
+                    selectionValue = "select"
                 }
-                String displayText = selectionText
-                String toggleColor = selectionText == "select" ? "#757575" : "#2196F3"
+                String displayText = selectionValue.capitalize()
+                String toggleColor = selectionValue == "select" ? "#757575" : "#2196F3"
                 String earlierLaterButton = buttonLink("toggleEarlierLater|$deviceAndScheduleId", displayText, toggleColor)
                 str += "<td ${tdAttr} title='Choose which configured time should run'>$earlierLaterButton</td>"
             }
