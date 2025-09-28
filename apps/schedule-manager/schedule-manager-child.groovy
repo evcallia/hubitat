@@ -186,6 +186,7 @@ def mainPage() {
                 input name: "activationSwitchOnOff", type: "enum", title: getFormat("important2", "on or off?"), submitOnChange: true, style: 'margin-left:70px', multiple: false, required: true, options: ["on", "off"]
             }
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "onlyRunWhenNotAlreadySetBool", type: "bool", title: getFormat("important2", "<b>Only run when not already set?</b><br><small>When enabled, schedules can skip running if the device level already matches the desired value.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "dualTimeBool", type: "bool", title: getFormat("important2", "<b>Enable earlier/later dual times?</b><br><small>Allows each schedule to configure two times and run at the earlier or later value.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>When this option is selected, a new column called \"Restore at Boot\" will appear in the table where you can manage this setting for individual times. <br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
@@ -1080,6 +1081,25 @@ String displayTable() {
         state.remove("removeRunTime")
     }
 
+    if (state.toggleSkipComparison) {
+        def (deviceId, scheduleId) = state.toggleSkipComparison.tokenize('|')
+        def schedule = state.devices[deviceId]?.schedules?[scheduleId]
+        if (schedule) {
+            String current = (schedule.skipComparison ?: "select").toString().toLowerCase()
+            if (current == "-") {
+                current = "select"
+            }
+            List<String> options = ["select", "greater", "less"]
+            int currentIndex = options.indexOf(current)
+            if (currentIndex == -1) {
+                currentIndex = 0
+            }
+            int nextIndex = (currentIndex + 1) % options.size()
+            schedule.skipComparison = options[nextIndex]
+        }
+        state.remove("toggleSkipComparison")
+    }
+
     if (state.restoreToggle){
         def (deviceId, scheduleId) = state.restoreToggle.tokenize('|')
 
@@ -1096,18 +1116,29 @@ String displayTable() {
     if (state.setCapabilityDimmer) {
         def deviceId = state.setCapabilityDimmer
         state.devices[deviceId].capability = "Dimmer"
+        state.devices[deviceId].schedules.each { _, sched ->
+            if (!sched.containsKey('skipComparison') || sched.skipComparison == null || sched.skipComparison == "-") {
+                sched.skipComparison = "select"
+            }
+        }
         state.remove("setCapabilityDimmer")
     }
 
     if (state.setCapabilitySwitch) {
         def deviceId = state.setCapabilitySwitch
         state.devices[deviceId].capability = "Switch"
+        state.devices[deviceId].schedules.each { _, sched ->
+            sched.skipComparison = "-"
+        }
         state.remove("setCapabilitySwitch")
     }
 
     if (state.setCapabilityButton) {
         def deviceId = state.setCapabilityButton
         state.devices[deviceId].capability = "Button"
+        state.devices[deviceId].schedules.each { _, sched ->
+            sched.skipComparison = "-"
+        }
         state.remove("setCapabilityButton")
     }
 
@@ -1157,7 +1188,14 @@ String renderScheduleTableMarkup() {
         <th>Sat</th>
         <th>Pause<br>Schedule</th>
         <th>Desired<br>State</th>
-        <th class='prominent-border-right'>Desired<br>Level</th>
+"""
+    if (onlyRunWhenNotAlreadySetBool) {
+        str += "<th>Desired<br>Level</th><th class='prominent-border-right'>Don't Run<br>If Value Is</th>"
+    } else {
+        str += "<th class='prominent-border-right'>Desired<br>Level</th>"
+    }
+
+    str += """
         <th>Remove<br>Run</th>
 """
     if (restoreAfterBootBool) {
@@ -1198,6 +1236,13 @@ String renderScheduleTableMarkup() {
                 entry.value.earlierLater = "select"
             } else {
                 entry.value.earlierLater = entry.value.earlierLater.toString().toLowerCase()
+            }
+            if (!entry.value.containsKey('skipComparison') || entry.value.skipComparison == null) {
+                entry.value.skipComparison = state.devices["$dev.id"].capability == "Dimmer" ? "select" : "-"
+            } else if (state.devices["$dev.id"].capability == "Dimmer" && entry.value.skipComparison == "-") {
+                entry.value.skipComparison = "select"
+            } else if (state.devices["$dev.id"].capability != "Dimmer") {
+                entry.value.skipComparison = "-"
             }
             ensureSecondaryTimeConfig(entry.value)
         }
@@ -1374,6 +1419,39 @@ String renderScheduleTableMarkup() {
                 desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId", schedule.desiredLevel.toString(), "MediumBlue")
             }
 
+            String skipComparisonButton = "-"
+            if (onlyRunWhenNotAlreadySetBool) {
+                if (state.devices["$dev.id"].capability == "Dimmer") {
+                    String comparison = (schedule.skipComparison ?: "select").toString().toLowerCase()
+                    if (comparison == "-") {
+                        comparison = "select"
+                    }
+                    if (!["select", "greater", "less"].contains(comparison)) {
+                        comparison = "select"
+                    }
+                    schedule.skipComparison = comparison
+                    String skipLabel
+                    String skipColor
+                    switch (comparison) {
+                        case "greater":
+                            skipLabel = "Greater"
+                            skipColor = "#E65100"
+                            break
+                        case "less":
+                            skipLabel = "Less"
+                            skipColor = "#1E88E5"
+                            break
+                        default:
+                            skipLabel = "Select"
+                            skipColor = "#757575"
+                            break
+                    }
+                    skipComparisonButton = buttonLink("toggleSkipComparison|$deviceAndScheduleId", skipLabel, skipColor)
+                } else {
+                    schedule.skipComparison = "-"
+                }
+            }
+
             if (schedule.sunTime) {
                 str += "<td ${tdAttr} id='editStartTime|${deviceAndScheduleId}' title='Start Time with Sunset or Sunrise +/- offset'>$startTime</td>" +
                         "<td ${tdAttr}>Using Sun<br>Time</td>"
@@ -1419,10 +1497,22 @@ String renderScheduleTableMarkup() {
                     "<td ${tdAttr} title='Check Box to Pause this device schedule, Red is paused, Green is run'>$pauseCheckBoxT</td>" +
                     "<td ${tdAttr} title='${state.devices["$dev.id"].capability == "Button" ? "Button Configuration" : "Click to change desired state"}'>$desiredStateButton</td>"
 
-            if (state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off")) {
-                str += "<td ${tdAttrRight}>-</td>"
+            boolean showDesiredLevel = !(state.devices["$dev.id"].capability == "Switch" || state.devices["$dev.id"].capability == "Button" || (schedule.desiredState && schedule.desiredState == "off"))
+            if (showDesiredLevel) {
+                str += "<td ${onlyRunWhenNotAlreadySetBool ? tdAttr : tdAttrRight} style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
             } else {
-                str += "<td ${tdAttrRight} style='font-weight:bold' title='Click to set dimmer level'>$desiredLevelButton</td>"
+                if (state.devices["$dev.id"].capability != "Dimmer") {
+                    schedule.skipComparison = "-"
+                }
+                str += "<td ${onlyRunWhenNotAlreadySetBool ? tdAttr : tdAttrRight}>-</td>"
+            }
+
+            if (onlyRunWhenNotAlreadySetBool) {
+                if (showDesiredLevel) {
+                    str += "<td ${tdAttrRight} title='Skip when current level already meets criteria'>$skipComparisonButton</td>"
+                } else {
+                    str += "<td ${tdAttrRight}>-</td>"
+                }
             }
 
             str += "<td ${tdAttr} title='Click to remove run'>$removeRunButton</td>"
@@ -1514,7 +1604,12 @@ String renderScheduleTableMarkup() {
                 7.times { str += "<td ${secondaryAttr}></td>" }
                 str += "<td ${secondaryAttr}></td>" // Pause
                 str += "<td ${secondaryAttr}></td>" // Desired state
-                str += "<td ${secondaryRightAttr}></td>" // Desired level
+                if (onlyRunWhenNotAlreadySetBool) {
+                    str += "<td ${secondaryAttr}></td>" // Desired level
+                    str += "<td ${secondaryRightAttr}></td>" // Skip column
+                } else {
+                    str += "<td ${secondaryRightAttr}></td>" // Desired level
+                }
                 str += "<td ${secondaryAttr}></td>" // Remove run
 
                 if (restoreAfterBootBool) {
@@ -1562,6 +1657,39 @@ void switchHandler(data) {
 
                 if (validDate) {
                     logDebug "switchHandler - Device: $device; schedule: $schedule"
+                    if (onlyRunWhenNotAlreadySetBool && deviceConfig.capability == "Dimmer" && schedule.desiredState == "on") {
+                        String comparison = (schedule.skipComparison ?: "select").toString().toLowerCase()
+                        if (comparison == "-") {
+                            comparison = "select"
+                        }
+                        if (["greater", "less"].contains(comparison)) {
+                            Closure<Integer> toInt = { val ->
+                                if (val == null) {
+                                    return null
+                                }
+                                if (val instanceof Number) {
+                                    return (val as Number).intValue()
+                                }
+                                try {
+                                    return val.toString().toBigDecimal().intValue()
+                                } catch (Exception ignored) {
+                                    return null
+                                }
+                            }
+
+                            Integer currentLevel = toInt(device?.currentValue("level"))
+                            Integer desiredLevel = toInt(schedule.desiredLevel)
+
+                            if (currentLevel != null && desiredLevel != null) {
+                                boolean skipRun = (comparison == "greater" && currentLevel > desiredLevel) ||
+                                                  (comparison == "less" && currentLevel < desiredLevel)
+                                if (skipRun) {
+                                    logDebug "Skipping run for Device: $device; schedule: $schedule - current level $currentLevel ${comparison == 'greater' ? '>' : '<'} desired level $desiredLevel"
+                                    return
+                                }
+                            }
+                        }
+                    }
                     if (deviceConfig.capability == "Button") {
                         if (schedule.buttonNumber && schedule.buttonAction && schedule.buttonAction != "No commands found") {
                             device."$schedule.buttonAction"(schedule.buttonNumber)
@@ -1653,6 +1781,7 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
     else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
     else if (btn.startsWith("restoreToggle|")) state.restoreToggle = btn.minus("restoreToggle|")
+    else if (btn.startsWith("toggleSkipComparison|")) state.toggleSkipComparison = btn.minus("toggleSkipComparison|")
 }
 
 
@@ -2091,6 +2220,7 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             buttonAction   : null,
             restore        : true,
             earlierLater   : "select",
+            skipComparison : "select",
             secondaryTime  : generateDefaultSecondaryTime()
     ]
 }
