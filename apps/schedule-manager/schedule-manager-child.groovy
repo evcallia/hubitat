@@ -1083,7 +1083,7 @@ String displayTable() {
 
     if (state.toggleSkipComparison) {
         def (deviceId, scheduleId) = state.toggleSkipComparison.tokenize('|')
-        def schedule = state.devices[deviceId]?.schedules?[scheduleId]
+        def schedule = state.devices[deviceId]?.schedules?.get(scheduleId)
         if (schedule) {
             String current = (schedule.skipComparison ?: "select").toString().toLowerCase()
             if (current == "-") {
