@@ -1435,7 +1435,7 @@ String renderScheduleTableMarkup() {
                     switch (comparison) {
                         case "greater":
                             skipLabel = "Greater"
-                            skipColor = "#E65100"
+                            skipColor = "#1E88E5"
                             break
                         case "less":
                             skipLabel = "Less"
