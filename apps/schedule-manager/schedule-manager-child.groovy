@@ -43,7 +43,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-09-25
+ *  Last modified: 2025-10-08
  *
  *  Changelog:
  *
@@ -78,7 +78,7 @@
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
  *  3.2.1 - 2025-09-23 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
  *                     - Allow for configuring debug log duration
- *  3.3.0 - 2025-09-25 - Add option to configure dual times and run at the earlier or later value
+ *  3.3.0 - 2025-10-08 - Add option to configure dual times and run at the earlier or later value
  *                     - Update cron generation and UI to support dual-time schedules
  */
 
@@ -97,11 +97,11 @@ def titleVersion() {
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia-dev",
+        namespace: "evcallia",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia-dev:Schedule Manager",
+        parent: "evcallia:Schedule Manager",
         iconUrl: "",
         iconX2Url: "",
         oauth: true
