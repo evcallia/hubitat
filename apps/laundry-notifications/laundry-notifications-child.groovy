@@ -1,3 +1,5 @@
+import java.text.SimpleDateFormat
+
 /**
  * ============================  Laundry Notifications (Child App) ============================
  *
@@ -46,9 +48,8 @@ preferences {
 Map configurationPage() {
     dynamicPage(name: 'configurationPage') {
         section('Instance Name') {
-            label title: 'Name this laundry monitor',
-                    required: false,
-                    defaultValue: app?.label
+            input name: "appName", type: "string", title: "Name this App", required: true, submitOnChange: true
+            setAppLabel()
         }
 
         section('Instructions') {
@@ -92,6 +93,19 @@ Map configurationPage() {
     }
 }
 
+void setAppLabel() {
+    if (appName) {
+        String label = appName
+        if (state.cycleStartTimestamp != null) {
+            def date = Date(state.cycleStartTimestamp)
+            label += " <span style='color:red;font-size:smaller'>(Started ${formatDate(date)})</span>"
+        }
+        app.updateLabel(label)
+    } else {
+        app.updateLabel("App name undefined")
+    }
+}
+
 void installed() {
     logInfo 'Installed child app.'
     initialize()
@@ -112,7 +126,6 @@ void initialize() {
     }
 
     state.cycleActive = false
-    state.resetScheduled = false
     
     removeAllInUseGlobalVar()  // remove all in use global Hub Variables
     if (hubVariableName) {
@@ -134,11 +147,15 @@ void handleAccelerationEvent(evt) {
 }
 
 void startCycle() {
-    logInfo 'Laundry cycle detected as running.'
-    state.cycleActive = true
-    cancelPendingReset()
+    if (!state.cycleActive == true) {
+        logInfo 'New laundry cycle detected.'
+        state.cycleActive = true
+        state.cycleStartTimestamp = now()
+        updateCycleSwitch(true)
+        setAppLabel()
+    }
+    unschedule(resetHubVariable)
     unschedule(confirmCycleComplete)
-    updateCycleSwitch(true)
 }
 
 void scheduleCycleCheck() {
@@ -156,9 +173,11 @@ void confirmCycleComplete() {
 
     logInfo 'Laundry cycle inactivity threshold reached; preparing notification.'
     state.cycleActive = false
+    state.cycleStartTimestamp = null
+    setAppLabel()
+    updateCycleSwitch(false)
     notifyConfiguredRecipient()
     scheduleHubVariableReset()
-    updateCycleSwitch(false)
 }
 
 void notifyConfiguredRecipient() {
@@ -182,15 +201,6 @@ void notifyConfiguredRecipient() {
 void scheduleHubVariableReset() {
     logDebug 'Scheduling hub variable reset in 30 minutes.'
     runIn(30 * 60, 'resetHubVariable', [overwrite: true])
-    state.resetScheduled = true
-}
-
-void cancelPendingReset() {
-    if (state.resetScheduled) {
-        logInfo 'Cancelling pending hub variable reset due to new cycle activity.'
-        unschedule(resetHubVariable)
-        state.resetScheduled = false
-    }
 }
 
 void resetHubVariable() {
@@ -204,9 +214,6 @@ void resetHubVariable() {
         setGlobalVar(hubVariableName, 'null')
     } catch (Exception ex) {
         log.error "Failed to reset hub variable '${hubVariableName}': ${ex.message}", ex
-    } finally {
-        state.resetScheduled = false
-        updateCycleSwitch(false)
     }
 }
 
@@ -280,16 +287,26 @@ Integer safeInteger(value, Integer defaultValue) {
     }
 }
 
+String formatDate(Date startTime) {
+    if (!startTime) {
+        return ''
+    }
+
+    SimpleDateFormat sdf = new SimpleDateFormat('MMM d, yyyy h:mm a')
+    sdf.setTimeZone(location?.timeZone ?: TimeZone.getTimeZone('UTC'))
+    return sdf.format(startTime)
+}
+
 void logDebug(String message) {
     if (enableDebugLogging) {
-        log.debug "[Laundry Notifications] ${message}"
+        log.debug "[${appName}] ${message}"
     }
 }
 
 void logInfo(String message) {
-    log.info "[Laundry Notifications] ${message}"
+    log.info "[${appName}] ${message}"
 }
 
 void logWarn(String message) {
-    log.warn "[Laundry Notifications] ${message}"
+    log.warn "[${appName}] ${message}"
 }
