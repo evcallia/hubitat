@@ -65,7 +65,7 @@ Map configurationPage() {
         section('Recipient Hub Variable') {
             Map<String, String> variableOptions = stringHubVariableOptions()
             input 'hubVariableName', 'enum', title: 'Hub variable name (String)', required: true,
-                    options: variableOptions, defaultValue: hubVariableName, submitOnChange: true
+                    options: variableOptions, submitOnChange: true, offerAll: false
             if (!variableOptions) {
                 paragraph 'No string hub variables were found. Create a string hub variable in Hub Variables and return to select it.'
             }
@@ -113,6 +113,13 @@ void initialize() {
 
     state.cycleActive = false
     state.resetScheduled = false
+    
+    removeAllInUseGlobalVar()  // remove all in use global Hub Variables
+    if (hubVariableName) {
+        addInUseGlobalVar(hubVariableName)
+        logDebug "Registering use of hub variable '${hubVariableName}'."
+    }
+
     subscribe(vibrationSensor, 'acceleration', handleAccelerationEvent)
     logDebug "Subscribed to acceleration events for ${vibrationSensor.displayName}."
 }
@@ -194,7 +201,7 @@ void resetHubVariable() {
 
     try {
         logInfo "Resetting hub variable '${hubVariableName}' to 'null'."
-        location.setVariable(hubVariableName, 'null')
+        setGlobalVar(hubVariableName, 'null')
     } catch (Exception ex) {
         log.error "Failed to reset hub variable '${hubVariableName}': ${ex.message}", ex
     } finally {
@@ -235,17 +242,11 @@ String currentHubVariableValue() {
         return null
     }
 
-    try {
-        Map variable = location.getVariable(hubVariableName)
-        if (!variable) {
-            logWarn "Hub variable '${hubVariableName}' not found."
-            return null
-        }
-        return variable.value
-    } catch (Exception ex) {
-        log.error "Unable to read hub variable '${hubVariableName}': ${ex.message}", ex
-        return null
+    def val = getGlobalVar(hubVariableName)
+    if (val != null) {
+        return val.value
     }
+    return null
 }
 
 Map recipientDeviceMap() {
@@ -261,134 +262,14 @@ Map recipientDeviceMap() {
 
 // Build a map of available string hub variables so the configuration can present them in a dropdown.
 Map<String, String> stringHubVariableOptions() {
-    Map<String, String> options = [:]
+    def variables = [:]
 
-    Closure addOption = { Object rawName ->
-        String name = rawName?.toString()?.trim()
-        if (name && !options.containsKey(name)) {
-            options[name] = name
-        }
+    // Create a map of variable names to their name & value concatenation
+    def allVariables = getGlobalVarsByType("string")
+    allVariables.each { key, value ->
+        variables[key] = "$key: ${value.value}"
     }
-
-    Closure processCandidate
-    processCandidate = { Object candidate, Object fallbackName = null ->
-        if (!candidate && !fallbackName) {
-            return
-        }
-
-        String detectedType = null
-        String detectedName = null
-
-        if (candidate instanceof Collection) {
-            candidate.each { item ->
-                processCandidate(item, fallbackName)
-            }
-            return
-        }
-
-        if (candidate instanceof Map) {
-            detectedType = candidate.type ?: candidate.variableType ?: candidate.valueType
-            detectedName = candidate.name ?: candidate.variableName ?: candidate.key ?: fallbackName?.toString()
-
-            if (!detectedType && candidate.containsKey('value') && candidate.value instanceof Map) {
-                processCandidate(candidate.value, detectedName ?: fallbackName)
-                return
-            }
-        } else if (candidate != null) {
-            try {
-                detectedType = candidate.hasProperty('type') ? candidate.type : detectedType
-            } catch (Exception ignored) {
-                // Property not available, fall through.
-            }
-            try {
-                detectedType = detectedType ?: (candidate.hasProperty('variableType') ? candidate.variableType : null)
-            } catch (Exception ignored) {
-                // Property not available, fall through.
-            }
-            try {
-                detectedName = candidate.hasProperty('name') ? candidate.name : detectedName
-            } catch (Exception ignored) {
-                // Property not available, fall through.
-            }
-            try {
-                detectedName = detectedName ?: (candidate.hasProperty('variableName') ? candidate.variableName : null)
-            } catch (Exception ignored) {
-                // Property not available, fall through.
-            }
-            try {
-                detectedName = detectedName ?: (candidate.hasProperty('key') ? candidate.key : null)
-            } catch (Exception ignored) {
-                // Property not available, fall through.
-            }
-        }
-
-        if (!detectedType && candidate instanceof CharSequence) {
-            detectedType = candidate.toString()
-        }
-
-        detectedName = detectedName ?: fallbackName?.toString()
-
-        if (detectedType?.toString()?.equalsIgnoreCase('string')) {
-            addOption(detectedName)
-        }
-    }
-
-    Closure processContainer = { Object container ->
-        if (!container) {
-            return
-        }
-
-        if (container instanceof Map) {
-            container.each { key, value ->
-                processCandidate(value, key)
-            }
-        } else if (container instanceof Collection) {
-            container.each { item ->
-                processCandidate(item)
-            }
-        } else {
-            processCandidate(container)
-        }
-    }
-
-    try {
-        if (location?.respondsTo('listVariables')) {
-            processContainer(location.listVariables())
-        }
-
-        if (!options && location?.respondsTo('getVariables')) {
-            processContainer(location.getVariables())
-        }
-
-        if (location?.respondsTo('getGlobalVarsByType')) {
-            // Directly query Hubitat's global variable API for string-typed entries.
-            processContainer(location.getGlobalVarsByType('string'))
-        }
-
-        if (!options) {
-            try {
-                processContainer(location?.hubVariables)
-            } catch (MissingPropertyException ignored) {
-                // Property not exposed; nothing to do.
-            }
-        }
-
-        if (!options && location?.respondsTo('getAllGlobalVars')) {
-            processContainer(location.getAllGlobalVars())
-        }
-
-        if (!options && location?.respondsTo('getAllHubVariables')) {
-            processContainer(location.getAllHubVariables())
-        }
-    } catch (Exception ex) {
-        logWarn "Unable to load hub variable options: ${ex.message}"
-    }
-
-    if (!options && hubVariableName) {
-        addOption(hubVariableName)
-    }
-
-    return options
+    return variables
 }
 
 Integer safeInteger(value, Integer defaultValue) {
