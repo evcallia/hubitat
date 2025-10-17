@@ -1,5 +1,3 @@
-import java.text.SimpleDateFormat
-
 /**
  * ============================  Laundry Notifications (Child App) ============================
  *
@@ -29,6 +27,9 @@ import java.text.SimpleDateFormat
  *  Last modified: 2024-04-04
  */
 
+import java.time.format.DateTimeFormatter
+import java.time.ZonedDateTime
+
 definition(
         name: "Laundry Notifications (Child App)",
         namespace: "evcallia",
@@ -42,37 +43,38 @@ definition(
 )
 
 preferences {
-    page(name: 'configurationPage', title: 'Laundry Notifications - Child', install: true, uninstall: true)
+    page(name: 'configurationPage', install: true, uninstall: true)
 }
 
 Map configurationPage() {
     dynamicPage(name: 'configurationPage') {
-        section('Instance Name') {
+        section() {
             input name: "appName", type: "string", title: "Name this App", required: true, submitOnChange: true
             setAppLabel()
         }
 
         section('Instructions') {
             paragraph 'Select the vibration sensor for your machine and specify how long it must remain inactive before a cycle is considered complete.'
-            paragraph 'Choose the hub variable (type: String) that stores the person to notify. Map each possible hub variable value to the appropriate notification device.'
+            paragraph 'Choose the hub variable that stores the person to notify. Map each possible hub variable value to the appropriate notification device.'
         }
 
-        section('Laundry Sensor Configuration') {
+        section('Configuration') {
             input 'vibrationSensor', 'capability.accelerationSensor', title: 'Laundry vibration/acceleration sensor', required: true
             input 'inactivityMinutes', 'number', title: 'Minutes of inactivity before notifying', required: true, defaultValue: 5
+            input 'activeConfirmationSeconds', 'number', title: 'Seconds of continuous activity before confirming cycle start', required: true, defaultValue: 30
             input 'cycleStatusSwitch', 'capability.switch', title: 'Optional switch to reflect cycle status', required: false
         }
 
-        section('Recipient Hub Variable') {
+        section() {
             Map<String, String> variableOptions = stringHubVariableOptions()
-            input 'hubVariableName', 'enum', title: 'Hub variable name (String)', required: true,
+            input 'hubVariableName', 'enum', title: 'Hub variable name', required: true,
                     options: variableOptions, submitOnChange: true, offerAll: false
             if (!variableOptions) {
                 paragraph 'No string hub variables were found. Create a string hub variable in Hub Variables and return to select it.'
             }
         }
 
-        section('Notification Recipients') {
+        section('Recipients') {
             paragraph 'Select all notification devices and enter the hub variable value (name) that should trigger each device.'
             input 'notificationDevices', 'capability.notification', title: 'Notification devices', multiple: true, submitOnChange: true, required: true
 
@@ -93,13 +95,14 @@ Map configurationPage() {
     }
 }
 
-void setAppLabel() {
+void setAppLabel(Boolean start=null) {
     if (appName) {
         String label = appName
-        if (state.cycleStartTimestamp != null) {
-            def date = Date(state.cycleStartTimestamp)
-            label += " <span style='color:red;font-size:smaller'>(Started ${formatDate(date)})</span>"
-        }
+        if (start != null && start && state.cycleStartTimestamp != null) {
+            label += " <span style='color:green; font-size:smaller'>(Started ${state.cycleStartTimestamp})</span>"
+        } else if (start != null && !start && state.cycleStartTimestamp != null) {
+            label += " <span style='color:green; font-size:smaller'>(Ended ${state.cycleStartTimestamp})</span>"
+        } 
         app.updateLabel(label)
     } else {
         app.updateLabel("App name undefined")
@@ -126,7 +129,8 @@ void initialize() {
     }
 
     state.cycleActive = false
-    
+    unschedule(confirmCycleStart)
+
     removeAllInUseGlobalVar()  // remove all in use global Hub Variables
     if (hubVariableName) {
         addInUseGlobalVar(hubVariableName)
@@ -140,22 +144,37 @@ void initialize() {
 void handleAccelerationEvent(evt) {
     logDebug "Acceleration event received: ${evt.value}"
     if (evt?.value == 'active') {
-        startCycle()
+        if (state.cycleActive) {
+            startCycle()
+        } else {
+            scheduleCycleStartConfirmation()
+        }
     } else if (evt?.value == 'inactive') {
-        scheduleCycleCheck()
+        if (state.cycleActive) {
+            scheduleCycleCheck()
+        } else {
+            cancelPendingStartCheck()
+        }
     }
 }
 
 void startCycle() {
-    if (!state.cycleActive == true) {
+    if (!state.cycleActive) {
         logInfo 'New laundry cycle detected.'
         state.cycleActive = true
-        state.cycleStartTimestamp = now()
+        state.cycleStartTimestamp = getFormattedDateTime()
         updateCycleSwitch(true)
-        setAppLabel()
+        setAppLabel(true)
     }
+    unschedule(confirmCycleStart)
     unschedule(resetHubVariable)
     unschedule(confirmCycleComplete)
+}
+
+String getFormattedDateTime() {
+    def zdt = ZonedDateTime.now()
+    def formatter = DateTimeFormatter.ofPattern("MM-dd hh:mm a")
+    return zdt.format(formatter)
 }
 
 void scheduleCycleCheck() {
@@ -163,6 +182,38 @@ void scheduleCycleCheck() {
     Integer delaySeconds = Math.max(minutes, 0) * 60
     logDebug "Scheduling cycle check in ${delaySeconds} second(s)."
     runIn(delaySeconds, 'confirmCycleComplete', [overwrite: true])
+}
+
+void scheduleCycleStartConfirmation() {
+    Integer seconds = safeInteger(activeConfirmationSeconds, 30)
+    seconds = Math.max(seconds, 0)
+    if (seconds <= 0) {
+        logDebug 'Active confirmation threshold not set; starting cycle immediately.'
+        confirmCycleStart()
+        return
+    }
+
+    logDebug "Scheduling cycle start confirmation in ${seconds} second(s)."
+    runIn(seconds, 'confirmCycleStart', [overwrite: true])
+}
+
+void cancelPendingStartCheck() {
+    logDebug 'Cancelling pending cycle start confirmation.'
+    unschedule(confirmCycleStart)
+}
+
+void confirmCycleStart() {
+    if (state.cycleActive) {
+        logDebug 'Cycle already marked active; skipping confirmation.'
+        return
+    }
+
+    if (vibrationSensor?.currentValue('acceleration') == 'active') {
+        logDebug 'Vibration sensor remained active for required duration; starting cycle.'
+        startCycle()
+    } else {
+        logDebug 'Vibration sensor is no longer active; cycle start aborted.'
+    }
 }
 
 void confirmCycleComplete() {
@@ -173,8 +224,8 @@ void confirmCycleComplete() {
 
     logInfo 'Laundry cycle inactivity threshold reached; preparing notification.'
     state.cycleActive = false
-    state.cycleStartTimestamp = null
-    setAppLabel()
+    state.cycleStartTimestamp = getFormattedDateTime()
+    setAppLabel(false)
     updateCycleSwitch(false)
     notifyConfiguredRecipient()
     scheduleHubVariableReset()
@@ -219,7 +270,7 @@ void resetHubVariable() {
 
 // Build the notification text using the configured template and recipient value.
 String resolveNotificationMessage(String recipientName) {
-    String template = customNotificationMessage ?: 'Laundry cycle complete for %recipient%.'
+    String template = "${getFormattedDateTime()}: " + customNotificationMessage ?: 'Laundry cycle complete for %recipient%.'
     String safeRecipient = recipientName ?: ''
     return template.replace('%recipient%', safeRecipient)
 }
@@ -285,16 +336,6 @@ Integer safeInteger(value, Integer defaultValue) {
     } catch (Exception ignored) {
         return defaultValue
     }
-}
-
-String formatDate(Date startTime) {
-    if (!startTime) {
-        return ''
-    }
-
-    SimpleDateFormat sdf = new SimpleDateFormat('MMM d, yyyy h:mm a')
-    sdf.setTimeZone(location?.timeZone ?: TimeZone.getTimeZone('UTC'))
-    return sdf.format(startTime)
 }
 
 void logDebug(String message) {
