@@ -3,10 +3,9 @@
  *
  *  DESCRIPTION:
  *  This app allows users to configure a time table, per device, and schedule the desired state for each configured
- *  time. Users can select any number of switches/dimmers, schedule them based on a set time or sunrise/set (with
- *  offset), and configure the desired state for that time. Additionally, users can pause the schedule for individual
- *  times. Advanced options include only running for desired modes or when a specific switch is set in addition to
- *  the ability to manually pause all schedules.
+ *  time. Users can select any number of switches/dimmers, schedule them based on a set time, sunrise/set or Hub
+ *  Variable (with offset), and configure the desired state for that time. Additionally, users can pause the 
+ *  schedule for individual times. Advanced options listed below.
  *
  *  Features:
  *  - Schedule any number of switches/dimmers
@@ -16,6 +15,9 @@
  *  - [Optional] Configure which modes to run schedules for
  *  - [Optional] Configure "override switch" that will prevent schedules from running
  *  - [Optional] Option to pause all schedules
+ *  - [Optional] Restore device settings to latest schedule when hub reboots
+      - When enabled, may be configured on a per-schedule basis
+ *  - [Optional] Enable dual times to run at the earlier or later value per schedule
  *
  *  TO INSTALL:
  *  Add code for parent app and then and child app (this). Install/create new instance of parent
@@ -41,7 +43,7 @@
  *
  * =======================================================================================
  *
- *  Last modified: 2025-10-05
+ *  Last modified: 2025-10-08
  *
  *  Changelog:
  *
@@ -76,7 +78,7 @@
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
  *  3.2.1 - 2025-09-23 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
  *                     - Allow for configuring debug log duration
- *  3.3.0 - 2025-10-05 - Add option to configure dual times and run at the earlier or later value
+ *  3.3.0 - 2025-10-08 - Add option to configure dual times and run at the earlier or later value
  *                     - Update cron generation and UI to support dual-time schedules
  */
 
@@ -700,7 +702,6 @@ String loadScript() {
                             if (xhr.readyState === 4 && xhr.status === 200) {
                                 // When successful, update the input field in the table so we don't need to page refresh
                                 const suffix = effectiveTimeType ? "|" + effectiveTimeType : "";
-                                document.getElementById("editStartTime|" + deviceId + "|" + scheduleId + suffix).innerHTML = input.value;
                                 refreshScheduleTable();
                             }
                         };
@@ -752,8 +753,6 @@ String loadScript() {
                                     idPrefix = "editStartTime|";
                                 }
 
-                                document.getElementById("newOffset|" + deviceId + "|" + scheduleId + suffix).innerHTML = input.value;
-                                document.getElementById(idPrefix + deviceId + "|" + scheduleId + suffix).innerHTML = newStartTime;
                                 refreshScheduleTable();
                             }
                         };
@@ -848,7 +847,6 @@ String loadScript() {
                                     const responseTimeType = jsonResponse.timeType || effectiveTimeType;
                                     const suffix = responseTimeType ? "|" + responseTimeType : "";
 
-                                    document.getElementById("selectVariableStartTime|" + deviceId + "|" + scheduleId + suffix).innerHTML = newStartTime;
                                     refreshScheduleTable();
                                 }
                             };
@@ -1008,9 +1006,7 @@ String displayTable() {
         def (deviceId, scheduleId) = state.toggleEarlierLater.tokenize('|')
         def schedule = state.devices[deviceId].schedules[scheduleId]
         def current = (schedule.earlierLater ?: "select").toString().toLowerCase()
-        if (current == "-") {
-            current = "select"
-        }
+
         String nextValue
         if (current == "select") {
             nextValue = "earlier"
@@ -1174,6 +1170,7 @@ String renderScheduleTableMarkup() {
         <th>Rise or<br>Set?</th>
         <th>Offset<br>+/-Min</th>
     """
+
     if (dualTimeBool) {
         str += "<th>Earlier<br>or Later</th>"
     }
@@ -1197,7 +1194,8 @@ String renderScheduleTableMarkup() {
 
     str += """
         <th>Remove<br>Run</th>
-"""
+    """
+
     if (restoreAfterBootBool) {
         str += "<th>Restore<br>at Boot</th>"
     }
@@ -1232,7 +1230,7 @@ String renderScheduleTableMarkup() {
         def deviceSchedules = state.devices["$dev.id"].schedules
 
         deviceSchedules.each { entry ->
-            if (!entry.value.earlierLater || entry.value.earlierLater == "-") {
+            if (!entry.value.earlierLater) {
                 entry.value.earlierLater = "select"
             } else {
                 entry.value.earlierLater = entry.value.earlierLater.toString().toLowerCase()
@@ -1416,6 +1414,11 @@ String renderScheduleTableMarkup() {
 
             // Handle button device specifics
             if (state.devices["$dev.id"].capability == "Button") {
+                if (schedule.buttonNumber == null) {
+                    schedule.buttonNumber = 1 // Default to button 1 if not set
+                }
+
+                // For button devices, show button config instead of desired state
                 def buttonCount = dev.currentValue("numberOfButtons") ?: 1
                 def buttonNum = schedule.buttonNumber ?: 1
                 def buttonOptions = (1..buttonCount).collect { n -> "<option value='${n}' ${n==buttonNum?'selected':''}>button ${n}</option>" }.join('')
@@ -1491,12 +1494,9 @@ String renderScheduleTableMarkup() {
             }
 
             if (dualTimeBool) {
-                String selectionText = (schedule.earlierLater ?: "select").toString().toLowerCase()
-                if (selectionText == "-") {
-                    selectionText = "select"
-                }
-                String displayText = selectionText
-                String toggleColor = selectionText == "select" ? "#757575" : "#2196F3"
+                String selectionValue = (schedule.earlierLater ?: "select").toString().toLowerCase()
+                String displayText = selectionValue.capitalize()
+                String toggleColor = selectionValue == "select" ? "#757575" : "#2196F3"
                 String earlierLaterButton = buttonLink("toggleEarlierLater|$deviceAndScheduleId", displayText, toggleColor)
                 str += "<td ${tdAttr} title='Choose which configured time should run'>$earlierLaterButton</td>"
             }
@@ -1907,7 +1907,7 @@ def buildCron() {
                 if (schedule.sat) days += "SAT,"
 
                 if (days != "") {
-                    days = days.substring(0, days.length() - 1)
+                    days = days.substring(0, days.length() - 1)  // Chop off last ","
                     schedule.days = days
                     schedule.cron = "0 ${minutes} ${hours} ? * ${days} *"
                     logDebug "deviceId: $deviceId; scheduleId: $scheduleId; Generated cron: ${schedule.cron}"
@@ -2276,9 +2276,6 @@ private Map getEffectiveTimeConfig(Map schedule) {
 
     Map secondary = ensureSecondaryTimeConfig(schedule)
     String selection = (schedule.earlierLater ?: "select").toString().toLowerCase()
-    if (selection == "-") {
-        selection = "select"
-    }
 
     if (!dualTimeBool || !["earlier", "later"].contains(selection)) {
         return [config: primary, isSecondary: false]
