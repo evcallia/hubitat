@@ -78,8 +78,9 @@
  *                       - Note that the manual restore also respects these settings, even if the column is hidden
  *  3.2.1 - 2025-09-23 - Automatically stagger the daily sunrise/sunset refresh away from user schedules in the 1 AM hour
  *                     - Allow for configuring debug log duration
- *  3.3.0 - 2025-10-08 - Add option to configure dual times and run at the earlier or later value
+ *  3.3.0 - 2025-10-08 - Add advanced option to configure dual times and run at the earlier or later value
  *                     - Update cron generation and UI to support dual-time schedules
+ *  3.4.0 - 2025-11-04 - Add advanced option to configure schedules not to run if device is already above/below scheduled level
  */
 
 import groovy.json.JsonOutput
@@ -91,7 +92,7 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.3.0"
+    state.version = "3.4.0"
 }
 
 definition(

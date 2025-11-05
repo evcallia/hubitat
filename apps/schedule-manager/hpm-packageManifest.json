@@ -1,8 +1,8 @@
 {
   "packageName": "Schedule Manager",
   "author": "Evan Callia",
-  "version": "3.3.0",
-  "releaseNotes": "- Add dual-time scheduling option with earlier/later selection\n- Update cron handling and UI to support secondary schedule times",
+  "version": "3.4.0",
+  "releaseNotes": "Add advanced option to configure schedules not to run if device is already above/below scheduled level\n. - Ex: Set shades to 50% if current value is below, else leave at currrent value",
   "minimumHEVersion": "0.0.0",
   "dateReleased": "2024-11-18",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
