@@ -1630,7 +1630,6 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("friChecked|")) state.friCheckedBox = btn.minus("friChecked|")
     else if (btn.startsWith("satUnChecked|")) state.satUnCheckedBox = btn.minus("satUnChecked|")
     else if (btn.startsWith("satChecked|")) state.satCheckedBox = btn.minus("satChecked|")
-    else if (btn.startsWith("editStartTime|")) state.newStartTime = btn.minus("editStartTime|")
     else if (btn.startsWith("pauseUnChecked|")) state.pauseUnCheckedBox = btn.minus("pauseUnChecked|")
     else if (btn.startsWith("pauseChecked|")) state.pauseCheckedBox = btn.minus("pauseChecked|")
     else if (btn.startsWith("sunTimeUnChecked|")) state.sunTimeUnCheckedBox = btn.minus("sunTimeUnChecked|")
@@ -2061,7 +2060,7 @@ String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15
 
     if (["editStartTime", "newOffset", "desiredLevel", "selectVariableStartTime"].contains(action)) {
         String extraParam = extra ? ", \"${extra}\"" : ""
-        return """<button type="button" name="${btnName}" id="${btnName}" title="Button" onClick='${action}Popup("${deviceId}","${scheduleId}", "${linkText}"${extraParam})' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block;background:none;border:none'>${linkText}</button>"""
+        return """<span role="button" id="${btnName}" onclick='event.preventDefault(); event.stopPropagation(); ${action}Popup("${deviceId}","${scheduleId}", "${linkText}"${extraParam}); return false;' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>${linkText}</span>"""
     }
     return """<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$linkText</div></div><input type='hidden' name='settings[$btnName]' value=''>"""
 }
