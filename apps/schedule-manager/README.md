@@ -13,11 +13,17 @@ to manually pause all schedules.
 - Schedules based on Hub Variable time (date, time or datetime)
 - Individual schedules may be paused
 - Set desired state for switch/dimmer to be in at specified time
-- [Optional] Configure which modes to run schedules for
-- [Optional] Configure "override switch" that will prevent schedules from running
-- [Optional] Option to pause all schedules
-- [Optional] Restore device settings to latest schedule when hub reboots
-  - When enabled, may be configured on a per-schedule basis
+
+## Advanced Options
+1. [Optional] Configure modes for which the schedule should apply
+2. [Optional] Configure a switch which must be set for a schedule to be applied 
+3. [Optional] Turn "on" devices before issuing "setLevel" command.
+   - Useful when a device doesn't turn on via a setLevel command
+4. [Optional] Pause all schedule
+5. [Optional] Restore device settings to latest schedule when hub reboots
+   - When enabled, may be configured on a per-schedule basis
+6. [Optional] Enable dual times to run at the earlier or later value per schedule
+7. [Optional] Option to configure schedules not to run if device is already above/below scheduled level
 
 ## Usage
 Add code for parent app and then and child app. Install/create new instance of parent app and begin using.
@@ -46,16 +52,6 @@ Here we'll walk through the setup of an app
    - Enable/pause a schedule
    - Configure the desired state, level or action of a device
    - You may remove a schedule by clicking the "X" next to a schedule
-
-Advanced Options
-1. [Optional] Configure modes for which the schedule should apply
-2. [Optional] Configure a switch when must be set for a schedule to be applied 
-3. [Optional] Turn "on" devices before issuing "setLevel" command.
-   - Useful when a device doesn't turn on via a setLevel command
-4. [Optional] Pause all schedule
-5. [Optional] Restore device settings to latest schedule when hub reboots
-   - When enabled, may be configured on a per-schedule basis
-6. [Optional] Enable dual times to run at the earlier or later value per schedule
 
 ![example-setup.png](./example-setup.png)
 
