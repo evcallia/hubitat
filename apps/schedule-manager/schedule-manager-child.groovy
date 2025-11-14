@@ -2,26 +2,16 @@
  * ==========================  Schedule Manager (Child App) ==========================
  *
  *  DESCRIPTION:
- *  This app allows users to configure a time table, per device, and schedule the desired state for each configured
- *  time. Users can select any number of switches/dimmers, schedule them based on a set time, sunrise/set or Hub
- *  Variable (with offset), and configure the desired state for that time. Additionally, users can pause the 
- *  schedule for individual times. Advanced options listed below.
+ *  This app allows users to configure a time table, per device, and schedule the desired state for each configured time. 
+ *  Users can select any number of switches/dimmers/buttons, schedule them based on a set time, hub variable or sunrise/set (with offset), 
+ *  and configure the desired state/action for that time. Additionally, users can pause the schedule for individual times. 
+ *  Advanced options include only running for desired modes or when a specific switch is set in addition to the ability 
+ *  to manually pause all schedules.
  *
- *  Features:
- *  - Schedule any number of switches/dimmers
- *  - Schedules based on selected time or sunrise/set with offset
- *  - Individual schedules may be paused
- *  - Set desired state for switch/dimmer to be in at specified time
- *  - [Optional] Configure which modes to run schedules for
- *  - [Optional] Configure "override switch" that will prevent schedules from running
- *  - [Optional] Option to pause all schedules
- *  - [Optional] Restore device settings to latest schedule when hub reboots
-      - When enabled, may be configured on a per-schedule basis
- *  - [Optional] Enable dual times to run at the earlier or later value per schedule
+ *  For feature details and installation instructions, see README at 
+ *  https://github.com/evcallia/hubitat/tree/main/apps/schedule-manager
  *
- *  TO INSTALL:
- *  Add code for parent app and then and child app (this). Install/create new instance of parent
- *  app and begin using. This app may also be installed via Hubitat Package Manager (preferred).
+ *  Community Forum: https://community.hubitat.com/t/release-schedule-manager-app/145646
  *
  *  Copyright 2024 Evan Callia
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -42,8 +32,6 @@
  * https://github.com/kampto/Hubitat/blob/main/Apps/Switch%20Scheduler%20and%20More
  *
  * =======================================================================================
- *
- *  Last modified: 2025-10-08
  *
  *  Changelog:
  *
@@ -82,6 +70,8 @@
  *                     - Update cron generation and UI to support dual-time schedules
  *  3.4.0 - 2025-11-04 - Add advanced option to configure schedules not to run if device is already above/below scheduled level
  *                     - Bug fix for c-5 hub: prevent page refresh when popup is opened
+ *  3.5.0 - 2025-11-14 - Add advanced option to turn off devices when mode changes to an unselected mode
+ *                     - Add advanced option to restore devices to latest schedule when mode changes to a selected mode
  */
 
 import groovy.json.JsonOutput
@@ -93,7 +83,7 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.4.0"
+    state.version = "3.5.0"
 }
 
 definition(
@@ -183,6 +173,8 @@ def mainPage() {
             input name: "modeBool", type: "bool", title: getFormat("important2", "<b>Only run schedules during a selected mode?</b><br><small>Home, Away,.. Applies to all Devices</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (modeBool) {
                 input name: "mode", type: "mode", title: getFormat("important2", "<b>Select mode(s) for schedules to run</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px', multiple: true
+                input name: "turnOffUnselectedModesBool", type: "bool", title: getFormat("important2", "<b>Turn off all devices in unselected modes?</b><br><small>When the mode changes to an unselected option, all controllable devices will be turned off.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
+                input name: "restoreAfterModeChangeBool", type: "bool", title: getFormat("important2", "<b>Restore to latest schedule after mode change?</b><br><small>When the mode changes to a selected option, devices will be restored using the latest schedule.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
             }
             input name: "switchActivationBool", type: "bool", title: getFormat("important2", "<b>Only run schedules when a specific switch is set</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (switchActivationBool) {
@@ -1947,6 +1939,48 @@ def handleHubBootUp(evt) {
     }
 }
 
+def handleModeChange(evt) {
+    String currentMode = evt?.value ?: location?.mode
+    logDebug "Mode changed to ${currentMode}"
+
+    if (!modeBool) {
+        logDebug "Mode change handling skipped - mode restriction disabled"
+        return
+    }
+
+    if (pauseBool) {
+        logDebug "Mode change handling skipped - app is paused"
+        return
+    }
+
+    if (switchActivationBool && activationSwitch?.currentSwitch != activationSwitchOnOff) {
+        logDebug "Mode change handling skipped - activation switch condition not met - ${activationSwitch?.currentSwitch} is not ${activationSwitchOnOff}"
+        return
+    }
+
+    List<String> selectedModes = []
+    if (mode instanceof Collection) {
+        selectedModes.addAll(mode.findAll { it })
+    } else if (mode) {
+        selectedModes << mode
+    }
+
+    boolean modeIsSelected = selectedModes?.contains(currentMode)
+
+    if (!modeIsSelected) {
+        if (turnOffUnselectedModesBool) {
+            logDebug "Mode ${currentMode} is not selected - turning off all controllable devices"
+            turnOffDevicesForModeRestriction()
+        }
+        return
+    }
+
+    if (restoreAfterModeChangeBool) {
+        logDebug "Mode ${currentMode} is selected - restoring devices to latest schedule"
+        restoreState()
+    }
+}
+
 /* * Function to get the last run time from a cron expression.
  * It searches for the most recent time before now, going back up to 7 days.
  */
@@ -2055,6 +2089,28 @@ private restoreState(shouldUpdate = false) {
             } else {
                 logDebug "No applicable schedule found for $dev to restore state after reboot"
             }
+        }
+    }
+}
+
+private void turnOffDevicesForModeRestriction() {
+    devices?.each { dev ->
+        def deviceConfig = state.devices[dev.id]
+
+        if (!deviceConfig) {
+            return
+        }
+
+        if (deviceConfig.capability == "Button") {
+            logDebug "Skipping turn off for $dev - device is configured as a button"
+            return
+        }
+
+        if (dev.hasCommand("off")) {
+            dev.off()
+            logDebug "$dev turned off due to mode restriction"
+        } else {
+            logDebug "$dev does not support off() command - skipping mode restriction shutdown"
         }
     }
 }
@@ -2476,6 +2532,11 @@ void initialize() {
     logDebug "initialize() called"
 
     subscribe(location, "systemStart", handleHubBootUp)
+
+    if (modeBool && (turnOffUnselectedModesBool || restoreAfterModeChangeBool)) {
+        subscribe(location, "mode", handleModeChange)
+        logDebug "Subscribed to mode change events"
+    }
 
     if (logEnableBool) {
         Integer loggingMinutes = getLoggingDurationMinutes()
