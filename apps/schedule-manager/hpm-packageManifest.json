@@ -2,7 +2,7 @@
   "packageName": "Schedule Manager",
   "author": "Evan Callia",
   "version": "3.4.0",
-  "releaseNotes": "Add advanced option to configure schedules not to run if device is already above/below scheduled level\n. - Ex: Set shades to 50% if current value is below, else leave at currrent value",
+  "releaseNotes": "- Add advanced option to configure schedules not to run if device is already above/below scheduled level\n  - Ex: Set shades to 50% if current value is below, else leave at currrent value\n- Bug fix for c-5 hub: prevent page refresh when popup is opened",
   "minimumHEVersion": "0.0.0",
   "dateReleased": "2024-11-18",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",

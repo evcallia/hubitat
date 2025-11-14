@@ -81,6 +81,7 @@
  *  3.3.0 - 2025-10-08 - Add advanced option to configure dual times and run at the earlier or later value
  *                     - Update cron generation and UI to support dual-time schedules
  *  3.4.0 - 2025-11-04 - Add advanced option to configure schedules not to run if device is already above/below scheduled level
+ *                     - Bug fix for c-5 hub: prevent page refresh when popup is opened
  */
 
 import groovy.json.JsonOutput
