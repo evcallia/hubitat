@@ -16,6 +16,8 @@ to manually pause all schedules.
 
 ## Advanced Options
 1. [Optional] Configure modes for which the schedule should apply
+   - [Optional] Turn off devices when mode changes to an unselected mode
+   - [Optional] Restore devices to latest schedule when mode changes to a selected mode
 2. [Optional] Configure a switch which must be set for a schedule to be applied 
 3. [Optional] Turn "on" devices before issuing "setLevel" command.
    - Useful when a device doesn't turn on via a setLevel command

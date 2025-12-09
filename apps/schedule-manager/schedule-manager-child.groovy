@@ -2,26 +2,16 @@
  * ==========================  Schedule Manager (Child App) ==========================
  *
  *  DESCRIPTION:
- *  This app allows users to configure a time table, per device, and schedule the desired state for each configured
- *  time. Users can select any number of switches/dimmers, schedule them based on a set time, sunrise/set or Hub
- *  Variable (with offset), and configure the desired state for that time. Additionally, users can pause the 
- *  schedule for individual times. Advanced options listed below.
+ *  This app allows users to configure a time table, per device, and schedule the desired state for each configured time. 
+ *  Users can select any number of switches/dimmers/buttons, schedule them based on a set time, hub variable or sunrise/set (with offset), 
+ *  and configure the desired state/action for that time. Additionally, users can pause the schedule for individual times. 
+ *  Advanced options include only running for desired modes or when a specific switch is set in addition to the ability 
+ *  to manually pause all schedules.
  *
- *  Features:
- *  - Schedule any number of switches/dimmers
- *  - Schedules based on selected time or sunrise/set with offset
- *  - Individual schedules may be paused
- *  - Set desired state for switch/dimmer to be in at specified time
- *  - [Optional] Configure which modes to run schedules for
- *  - [Optional] Configure "override switch" that will prevent schedules from running
- *  - [Optional] Option to pause all schedules
- *  - [Optional] Restore device settings to latest schedule when hub reboots
-      - When enabled, may be configured on a per-schedule basis
- *  - [Optional] Enable dual times to run at the earlier or later value per schedule
+ *  For feature details and installation instructions, see README at 
+ *  https://github.com/evcallia/hubitat/tree/main/apps/schedule-manager
  *
- *  TO INSTALL:
- *  Add code for parent app and then and child app (this). Install/create new instance of parent
- *  app and begin using. This app may also be installed via Hubitat Package Manager (preferred).
+ *  Community Forum: https://community.hubitat.com/t/release-schedule-manager-app/145646
  *
  *  Copyright 2024 Evan Callia
  *  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
@@ -42,8 +32,6 @@
  * https://github.com/kampto/Hubitat/blob/main/Apps/Switch%20Scheduler%20and%20More
  *
  * =======================================================================================
- *
- *  Last modified: 2025-10-08
  *
  *  Changelog:
  *
@@ -82,6 +70,8 @@
  *                     - Update cron generation and UI to support dual-time schedules
  *  3.4.0 - 2025-11-04 - Add advanced option to configure schedules not to run if device is already above/below scheduled level
  *                     - Bug fix for c-5 hub: prevent page refresh when popup is opened
+ *  3.5.0 - 2025-11-17 - Add advanced option to turn off devices when mode changes to an unselected mode
+ *                     - Add advanced option to restore devices to latest schedule when mode changes to a selected mode
  */
 
 import groovy.json.JsonOutput
@@ -93,7 +83,7 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.4.0"
+    state.version = "3.5.0"
 }
 
 definition(
@@ -154,6 +144,18 @@ def mainPage() {
             }
         }
 
+        // Needs to happen before table is rendered so 'Restore' column is conditionally rendered properly
+        if (!modeBool) {
+            if (turnOffUnselectedModesBool) {
+                modeSettingsCleared = true
+                app?.updateSetting("turnOffUnselectedModesBool", [value: "false", type: "bool"])
+            }
+            if (restoreAfterModeChangeBool) {
+                modeSettingsCleared = true
+                app?.updateSetting("restoreAfterModeChangeBool", [value: "false", type: "bool"])
+            }
+        }
+
         section {
             if (devices) {
                 def devicesToRemove = []
@@ -183,6 +185,8 @@ def mainPage() {
             input name: "modeBool", type: "bool", title: getFormat("important2", "<b>Only run schedules during a selected mode?</b><br><small>Home, Away,.. Applies to all Devices</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (modeBool) {
                 input name: "mode", type: "mode", title: getFormat("important2", "<b>Select mode(s) for schedules to run</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px', multiple: true
+                input name: "turnOffUnselectedModesBool", type: "bool", title: getFormat("important2", "<b>Turn off all devices in unselected modes?</b><br><small>When the mode changes to an unselected option, all controllable devices will be turned off.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
+                input name: "restoreAfterModeChangeBool", type: "bool", title: getFormat("important2", "<b>Restore to latest schedule after mode change?</b><br><small>When the mode changes to a selected option, devices will be restored using the latest schedule.<br>Adds \"Restore\" column.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
             }
             input name: "switchActivationBool", type: "bool", title: getFormat("important2", "<b>Only run schedules when a specific switch is set</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (switchActivationBool) {
@@ -190,9 +194,9 @@ def mainPage() {
                 input name: "activationSwitchOnOff", type: "enum", title: getFormat("important2", "on or off?"), submitOnChange: true, style: 'margin-left:70px', multiple: false, required: true, options: ["on", "off"]
             }
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
-            input name: "onlyRunWhenNotAlreadySetBool", type: "bool", title: getFormat("important2", "<b>Only run when not already set?</b><br><small>When enabled, schedules can skip running if the device level already matches the desired value.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
-            input name: "dualTimeBool", type: "bool", title: getFormat("important2", "<b>Enable earlier/later dual times?</b><br><small>Allows each schedule to configure two times and run at the earlier or later value.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
-            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>When this option is selected, a new column called \"Restore at Boot\" will appear in the table where you can manage this setting for individual times. <br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "onlyRunWhenNotAlreadySetBool", type: "bool", title: getFormat("important2", "<b>Only run when not already set?</b><br><small>When enabled, schedules can skip running if the device level already matches the desired value.<br>Adds 'Don't Run If Value Is' column.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "dualTimeBool", type: "bool", title: getFormat("important2", "<b>Enable earlier/later dual times?</b><br><small>Allows each schedule to configure two times and run at the earlier or later value.<br>Adds 'Earlier or Later' column.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>Adds \"Restore\" column.<br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
             input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Auto disables after configured duration</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
             if (logEnableBool) {
@@ -206,7 +210,7 @@ def mainPage() {
         section(getFormat("header", "Usage Notes"), hideable: true, hidden: hide) {
             paragraph """
                 <ul>
-                    <li>Use for any switch, outlet or dimmer. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
+                    <li>Use for any switch, outlet, dimmer or button. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
                     <li>In order to use this app, you must enable OAuth. This can be done by opening the Hubitat sidenav and clicking 'Apps Code'. Find 'Schedule Manager (Child App)' and click it. This opens code editor. On the top right, click the three stacked dots to open the menu and select 'OAuth' > 'Enable OAuth in App'.</li>
                     <li>If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of this instance in order for the app to get the new token.</li>
                     <li>Enter Start time in 24 hour format.</li>
@@ -214,9 +218,15 @@ def mainPage() {
                     <li>To use Hub Variables with/- offset, check 'Use Hub Variable' box, select your variable, click number to enter offset.</li>
                     <li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>
                     <li>Optional: Select which modes to run schedules for.</li>
+                    <ul>
+                        <li>Optional: Turn off devices when mode changes to an unselected mode.</li>
+                        <li>Optional: Restore devices to latest schedule when mode changes to a selected mode. When this option is selected, a new column called "Restore" will appear in the table where you can manage this setting for individual times.</li>
+                    </ul>
                     <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentially a pause button for all schedules.</li>
-                    <li>Optional: Select whether you want to device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
-                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. When this option is selected, a new column called "Restore at Boot" will appear in the table where you can manage this setting for individual times. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
+                    <li>Optional: Select whether you want device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
+                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. When this option is selected, a new column called "Restore" will appear in the table where you can manage this setting for individual times. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
+                    <li>Optional: Enable dual times. This allows you to select 2 times for a schedule and have it run at the earlier/later of them. Adds 'Earlier or Later' column.</li>
+                    <li>Optional: Configure schedules not to run if device is already above/below scheduled level. Adds 'Don't Run If Value Is' column.</li>
                     <li>Optional: Select whether you want to pause all schedules.</li>
                 </ul>"""
         }
@@ -1198,8 +1208,8 @@ String renderScheduleTableMarkup() {
         <th>Remove<br>Run</th>
     """
 
-    if (restoreAfterBootBool) {
-        str += "<th>Restore<br>at Boot</th>"
+    if (restoreAfterBootBool || restoreAfterModeChangeBool) {
+        str += "<th>Restore</th>"
     }
 
     str += """
@@ -1533,7 +1543,7 @@ String renderScheduleTableMarkup() {
 
             str += "<td ${tdAttr} title='Click to remove run'>$removeRunButton</td>"
 
-            if (restoreAfterBootBool) {
+            if (restoreAfterBootBool || restoreAfterModeChangeBool) {
                 if (schedule.restore == null) {
                     schedule.restore = true // Default to true if not set
                 }
@@ -1628,7 +1638,7 @@ String renderScheduleTableMarkup() {
                 }
                 str += "<td ${secondaryAttr}></td>" // Remove run
 
-                if (restoreAfterBootBool) {
+                if (restoreAfterBootBool || restoreAfterModeChangeBool) {
                     str += "<td ${secondaryAttr}></td>"
                 }
 
@@ -1947,6 +1957,48 @@ def handleHubBootUp(evt) {
     }
 }
 
+def handleModeChange(evt) {
+    String currentMode = evt?.value ?: location?.mode
+    logDebug "Mode changed to ${currentMode}"
+
+    if (!modeBool) {
+        logDebug "Mode change handling skipped - mode restriction disabled"
+        return
+    }
+
+    if (pauseBool) {
+        logDebug "Mode change handling skipped - app is paused"
+        return
+    }
+
+    if (switchActivationBool && activationSwitch?.currentSwitch != activationSwitchOnOff) {
+        logDebug "Mode change handling skipped - activation switch condition not met - ${activationSwitch?.currentSwitch} is not ${activationSwitchOnOff}"
+        return
+    }
+
+    List<String> selectedModes = []
+    if (mode instanceof Collection) {
+        selectedModes.addAll(mode.findAll { it })
+    } else if (mode) {
+        selectedModes << mode
+    }
+
+    boolean modeIsSelected = selectedModes?.contains(currentMode)
+
+    if (!modeIsSelected) {
+        if (turnOffUnselectedModesBool) {
+            logDebug "Mode ${currentMode} is not selected - turning off all controllable devices"
+            turnOffDevicesForModeRestriction()
+        }
+        return
+    }
+
+    if (restoreAfterModeChangeBool) {
+        logDebug "Mode ${currentMode} is selected - restoring devices to latest schedule"
+        restoreState()
+    }
+}
+
 /* * Function to get the last run time from a cron expression.
  * It searches for the most recent time before now, going back up to 7 days.
  */
@@ -2030,6 +2082,10 @@ private restoreState(shouldUpdate = false) {
             if (mostRecentSchedule) {
                 logDebug "Found most recent schedule for $dev: $mostRecentSchedule.desiredState at $mostRecentScheduleTime"
 
+                if (mostRecentSchedule.restore == null) {
+                    mostRecentSchedule.restore = true
+                }
+
                 // Skip if restore is not enabled
                 if (!mostRecentSchedule.restore) {
                     logDebug "Skipping restore for $dev - restore at boot not enabled for this schedule"
@@ -2055,6 +2111,28 @@ private restoreState(shouldUpdate = false) {
             } else {
                 logDebug "No applicable schedule found for $dev to restore state after reboot"
             }
+        }
+    }
+}
+
+private void turnOffDevicesForModeRestriction() {
+    devices?.each { dev ->
+        def deviceConfig = state.devices[dev.id]
+
+        if (!deviceConfig) {
+            return
+        }
+
+        if (deviceConfig.capability == "Button") {
+            logDebug "Skipping turn off for $dev - device is configured as a button"
+            return
+        }
+
+        if (dev.hasCommand("off")) {
+            dev.off()
+            logDebug "$dev turned off due to mode restriction"
+        } else {
+            logDebug "$dev does not support off() command - skipping mode restriction shutdown"
         }
     }
 }
@@ -2476,6 +2554,11 @@ void initialize() {
     logDebug "initialize() called"
 
     subscribe(location, "systemStart", handleHubBootUp)
+
+    if (modeBool && (turnOffUnselectedModesBool || restoreAfterModeChangeBool)) {
+        subscribe(location, "mode", handleModeChange)
+        logDebug "Subscribed to mode change events"
+    }
 
     if (logEnableBool) {
         Integer loggingMinutes = getLoggingDurationMinutes()
