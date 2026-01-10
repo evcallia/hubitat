@@ -72,6 +72,7 @@
  *                     - Bug fix for c-5 hub: prevent page refresh when popup is opened
  *  3.5.0 - 2025-11-17 - Add advanced option to turn off devices when mode changes to an unselected mode
  *                     - Add advanced option to restore devices to latest schedule when mode changes to a selected mode
+ *  3.6.0 - 2025-01-09 - Add support for restoring button devices after hub reboot and mode changes
  */
 
 import groovy.json.JsonOutput
@@ -83,17 +84,17 @@ import org.quartz.CronExpression
 
 def titleVersion() {
     state.name = "Schedule Manager"
-    state.version = "3.5.0"
+    state.version = "3.6.0"
 }
 
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia",
+        namespace: "evcallia-dev",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia:Schedule Manager",
+        parent: "evcallia-dev:Schedule Manager",
         iconUrl: "",
         iconX2Url: "",
         oauth: true
@@ -196,7 +197,7 @@ def mainPage() {
             input name: "activateOnBeforeLevelBool", type: "bool", title: getFormat("important2", "<b>Set 'on' before 'level'?</b><br><small>Use this option if a device does not turn on with a 'setLevel' command, but first needs to be turned on</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "onlyRunWhenNotAlreadySetBool", type: "bool", title: getFormat("important2", "<b>Only run when not already set?</b><br><small>When enabled, schedules can skip running if the device level already matches the desired value.<br>Adds 'Don't Run If Value Is' column.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "dualTimeBool", type: "bool", title: getFormat("important2", "<b>Enable earlier/later dual times?</b><br><small>Allows each schedule to configure two times and run at the earlier or later value.<br>Adds 'Earlier or Later' column.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
-            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart. Not applicable to buttons.<br>Adds \"Restore\" column.<br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
+            input name: "restoreAfterBootBool", type: "bool", title: getFormat("important2", "<b>Restore device states after hub reboot?</b><br><small>When enabled, devices will be set to their last scheduled state after hub restart.<br>Adds \"Restore\" column.<br>The most recent run for a schedule must be within 7 days or it will be ignored.<br>If 'modes' or 'activation switch' are selected, restore will only take place if those conditions are met.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             input name: "pauseBool", type: "bool", title: getFormat("important2","<b>Pause all schedules</b>"), defaultValue:false, submitOnChange:true, style: 'margin-left:10px'
             input name: "logEnableBool", type: "bool", title: getFormat("important2", "<b>Enable Logging of App based device activity and refreshes?</b><br><small>Auto disables after configured duration</small>"), defaultValue: true, submitOnChange: true, style: 'margin-left:10px'
             if (logEnableBool) {
@@ -224,7 +225,7 @@ def mainPage() {
                     </ul>
                     <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentially a pause button for all schedules.</li>
                     <li>Optional: Select whether you want device to first receive an 'on' command before a 'setLevel' command. Useful if a device does not turn on via a 'setLevel' command.</li>
-                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. When this option is selected, a new column called "Restore" will appear in the table where you can manage this setting for individual times. This does not apply to buttons and respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
+                    <li>Optional: Select whether you want to restore device state to last known schedule after hub reboot. When this option is selected, a new column called "Restore" will appear in the table where you can manage this setting for individual times. This respects the options for 'modes' and 'activation switches'. If there is not a schedule for the device in the last 7 days then the restore will be ignored. This is common if you're using hub variables and the value changed to some time in the future.</li>
                     <li>Optional: Enable dual times. This allows you to select 2 times for a schedule and have it run at the earlier/later of them. Adds 'Earlier or Later' column.</li>
                     <li>Optional: Configure schedules not to run if device is already above/below scheduled level. Adds 'Don't Run If Value Is' column.</li>
                     <li>Optional: Select whether you want to pause all schedules.</li>
@@ -1548,12 +1549,8 @@ String renderScheduleTableMarkup() {
                     schedule.restore = true // Default to true if not set
                 }
 
-                if (state.devices["$dev.id"].capability == "Button") {
-                    str += "<td ${tdAttr}>-</td>"
-                } else {
-                    def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
-                    str += "<td ${tdAttr} title='Restore this schedule at boot'>$restoreToggle</td>"
-                }
+                def restoreToggle = (schedule.restore) ? buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box'></iconify-icon>", "green", "23px") : buttonLink("restoreToggle|$deviceAndScheduleId", "<iconify-icon icon='material-symbols:check-box-outline-blank'></iconify-icon>", "black", "23px")
+                str += "<td ${tdAttr} title='Restore this schedule at boot/mode change'>$restoreToggle</td>"
             }
 
             str += "</tr>"
@@ -2030,12 +2027,6 @@ private restoreState(shouldUpdate = false) {
         def deviceConfig = state.devices[dev.id]
 
         if (deviceConfig) {
-            if (deviceConfig.capability == "Button") {
-                // Don't trigger button actions on boot
-                logDebug "Skipping button action for $dev on boot up"
-                return
-            }
-
             // Find most recent applicable schedule
             def mostRecentSchedule = null
             def mostRecentScheduleTime = null
@@ -2093,7 +2084,15 @@ private restoreState(shouldUpdate = false) {
                 }
 
                 // Apply schedule based on device capability
-                if (mostRecentSchedule.desiredState == "on") {
+                if (deviceConfig.capability == "Button") {
+                    // Trigger button action
+                    if (mostRecentSchedule.buttonNumber && mostRecentSchedule.buttonAction && mostRecentSchedule.buttonAction != "No commands found") {
+                        dev."$mostRecentSchedule.buttonAction"(mostRecentSchedule.buttonNumber)
+                        logDebug "$dev restored: $mostRecentSchedule.buttonAction $mostRecentSchedule.buttonNumber triggered"
+                    } else {
+                        logError "Cannot restore button action for $dev - invalid button configuration (action: ${mostRecentSchedule.buttonAction}, number: ${mostRecentSchedule.buttonNumber})"
+                    }
+                } else if (mostRecentSchedule.desiredState == "on") {
                     if (deviceConfig.capability == "Dimmer") {
                         if (activateOnBeforeLevelBool) {
                             dev.on()
