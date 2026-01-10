@@ -93,11 +93,11 @@ def titleVersion() {
 definition(
         name: "Schedule Manager (Child App)",
         label: "Schedule Manager Instance",
-        namespace: "evcallia-dev",
+        namespace: "evcallia",
         author: "Evan Callia",
         description: "Child app for schedule manager",
         category: "Control",
-        parent: "evcallia-dev:Schedule Manager",
+        parent: "evcallia:Schedule Manager",
         iconUrl: "",
         iconX2Url: "",
         oauth: true
