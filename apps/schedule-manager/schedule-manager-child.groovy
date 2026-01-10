@@ -73,6 +73,9 @@
  *  3.5.0 - 2025-11-17 - Add advanced option to turn off devices when mode changes to an unselected mode
  *                     - Add advanced option to restore devices to latest schedule when mode changes to a selected mode
  *  3.6.0 - 2025-01-09 - Add support for restoring button devices after hub reboot and mode changes
+ *                     - Add support for lock devices (lock/unlock actions)
+ *                     - Add support for garage door/gate devices (open/close actions)
+ *                     - Advanced option for locks to auto-lock and doors to auto-close when mode changes to unselected mode
  */
 
 import groovy.json.JsonOutput
@@ -120,14 +123,29 @@ def mainPage() {
 
         section(getFormat("header", "Initial Set-Up"), hideable: true, hidden: hide) {
             input name: "appName", type: "string", title: "<b>Name this App</b>", required: true, submitOnChange: true, width: 3
-            input "devices", "capability.switch, capability.SwitchLevel, capability.doubleTapableButton, capability.holdableButton, capability.pushableButton, capability.releasableButton", title: "<b>Select Devices</b>", required: true, multiple: true, submitOnChange: true, width: 6
+            input "devices", "capability.switch, capability.SwitchLevel, capability.doubleTapableButton, capability.holdableButton, capability.pushableButton, capability.releasableButton, capability.lock, capability.garageDoorControl", title: "<b>Select Devices</b>", required: true, multiple: true, submitOnChange: true, width: 6
 
             devices.each { dev ->
                 if (!state.devices["$dev.id"]) {
                     def isButton = dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] } != null
+                    def isLock = dev.capabilities.find { it.name == "Lock" } != null
+                    def isDoor = dev.capabilities.find { it.name == "GarageDoorControl" } != null
+
+                    // Determine initial capability: Dimmer > Button > Lock > Door > Switch
+                    def initialCapability = "Switch"
+                    if (dev.capabilities.find { it.name == "SwitchLevel" }) {
+                        initialCapability = "Dimmer"
+                    } else if (isButton) {
+                        initialCapability = "Button"
+                    } else if (isLock) {
+                        initialCapability = "Lock"
+                    } else if (isDoor) {
+                        initialCapability = "Door"
+                    }
+
                     state.devices["$dev.id"] = [
                         zone: 0,
-                        capability: dev.capabilities.find { it.name == "SwitchLevel" } ? "Dimmer" : (isButton? "Button" : "Switch"),
+                        capability: initialCapability,
                         schedules: [
                             (UUID.randomUUID().toString()): generateDefaultSchedule()
                         ],
@@ -186,7 +204,7 @@ def mainPage() {
             input name: "modeBool", type: "bool", title: getFormat("important2", "<b>Only run schedules during a selected mode?</b><br><small>Home, Away,.. Applies to all Devices</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
             if (modeBool) {
                 input name: "mode", type: "mode", title: getFormat("important2", "<b>Select mode(s) for schedules to run</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px', multiple: true
-                input name: "turnOffUnselectedModesBool", type: "bool", title: getFormat("important2", "<b>Turn off all devices in unselected modes?</b><br><small>When the mode changes to an unselected option, all controllable devices will be turned off.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
+                input name: "turnOffUnselectedModesBool", type: "bool", title: getFormat("important2", "<b>Turn off all devices in unselected modes?</b><br><small>When the mode changes to an unselected option, all controllable devices will be turned off.</small><br><small>Additionally, locks will be locked and doors will be closed.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
                 input name: "restoreAfterModeChangeBool", type: "bool", title: getFormat("important2", "<b>Restore to latest schedule after mode change?</b><br><small>When the mode changes to a selected option, devices will be restored using the latest schedule.<br>Adds \"Restore\" column.</small>"), defaultValue: false, submitOnChange: true, style: 'margin-left:70px'
             }
             input name: "switchActivationBool", type: "bool", title: getFormat("important2", "<b>Only run schedules when a specific switch is set</b>"), defaultValue: false, submitOnChange: true, style: 'margin-left:10px'
@@ -211,7 +229,7 @@ def mainPage() {
         section(getFormat("header", "Usage Notes"), hideable: true, hidden: hide) {
             paragraph """
                 <ul>
-                    <li>Use for any switch, outlet, dimmer or button. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
+                    <li>Use for any switch, outlet, dimmer, button, lock, or garage door/gate. This may also include shades or others depending on your driver. Add as many as you want to the table.</li>
                     <li>In order to use this app, you must enable OAuth. This can be done by opening the Hubitat sidenav and clicking 'Apps Code'. Find 'Schedule Manager (Child App)' and click it. This opens code editor. On the top right, click the three stacked dots to open the menu and select 'OAuth' > 'Enable OAuth in App'.</li>
                     <li>If you ever update your OAuth token, you must click 'Refresh OAuth Token' in the 'Advanced Options' of this instance in order for the app to get the new token.</li>
                     <li>Enter Start time in 24 hour format.</li>
@@ -220,7 +238,7 @@ def mainPage() {
                     <li>If you make/change a schedule, it wont take unless you hit 'Done' or 'Update/Store'.</li>
                     <li>Optional: Select which modes to run schedules for.</li>
                     <ul>
-                        <li>Optional: Turn off devices when mode changes to an unselected mode.</li>
+                        <li>Optional: Turn off devices when mode changes to an unselected mode. Locks will auto-lock and garage doors/gates will auto-close.</li>
                         <li>Optional: Restore devices to latest schedule when mode changes to a selected mode. When this option is selected, a new column called "Restore" will appear in the table where you can manage this setting for individual times.</li>
                     </ul>
                     <li>Optional: Select a switch that needs to be set on/off in order for schedules to run. This can be used as an override switch or essentially a pause button for all schedules.</li>
@@ -267,6 +285,14 @@ mappings {
 
     path("/updateButtonConfig") {
         action: [POST: "updateButtonConfig"]
+    }
+
+    path("/updateLockAction") {
+        action: [POST: "updateLockAction"]
+    }
+
+    path("/updateDoorAction") {
+        action: [POST: "updateDoorAction"]
     }
 
     path("/getScheduleTable") {
@@ -384,6 +410,30 @@ def updateButtonConfig() {
     }
     if (buttonAction) {
         state.devices[deviceId].schedules[scheduleId].buttonAction = buttonAction
+    }
+    render contentType: "application/json", data: JsonOutput.toJson([success: true])
+}
+
+def updateLockAction() {
+    logDebug "updateLockAction called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def lockAction = json.lockAction
+    if (lockAction && ["lock", "unlock"].contains(lockAction)) {
+        state.devices[deviceId].schedules[scheduleId].lockAction = lockAction
+    }
+    render contentType: "application/json", data: JsonOutput.toJson([success: true])
+}
+
+def updateDoorAction() {
+    logDebug "updateDoorAction called with args ${request.JSON}"
+    def json = request.JSON
+    def deviceId = json.deviceId
+    def scheduleId = json.scheduleId
+    def doorAction = json.doorAction
+    if (doorAction && ["open", "close"].contains(doorAction)) {
+        state.devices[deviceId].schedules[scheduleId].doorAction = doorAction
     }
     render contentType: "application/json", data: JsonOutput.toJson([success: true])
 }
@@ -895,6 +945,32 @@ String loadScript() {
                 });
                 xhr.send(data);
             }
+
+            // Lock action change
+            function lockActionChange(deviceId, scheduleId, value) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/apps/api/${app.id}/updateLockAction?access_token=${state.accessToken}', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                var data = JSON.stringify({
+                    deviceId: deviceId,
+                    scheduleId: scheduleId,
+                    lockAction: value
+                });
+                xhr.send(data);
+            }
+
+            // Door action change (garage door/gate)
+            function doorActionChange(deviceId, scheduleId, value) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/apps/api/${app.id}/updateDoorAction?access_token=${state.accessToken}', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                var data = JSON.stringify({
+                    deviceId: deviceId,
+                    scheduleId: scheduleId,
+                    doorAction: value
+                });
+                xhr.send(data);
+            }
         </script>
     """
 }
@@ -1151,6 +1227,24 @@ String displayTable() {
         state.remove("setCapabilityButton")
     }
 
+    if (state.setCapabilityLock) {
+        def deviceId = state.setCapabilityLock
+        state.devices[deviceId].capability = "Lock"
+        state.devices[deviceId].schedules.each { _, sched ->
+            sched.skipComparison = "-"
+        }
+        state.remove("setCapabilityLock")
+    }
+
+    if (state.setCapabilityDoor) {
+        def deviceId = state.setCapabilityDoor
+        state.devices[deviceId].capability = "Door"
+        state.devices[deviceId].schedules.each { _, sched ->
+            sched.skipComparison = "-"
+        }
+        state.remove("setCapabilityDoor")
+    }
+
     // Desired State
     if (state.desiredState) {
         def (deviceId, scheduleId) = state.desiredState.tokenize('|')
@@ -1288,24 +1382,54 @@ String renderScheduleTableMarkup() {
         String deviceCell = "<td ${deviceCellClassAttr} rowspan='$scheduleCount'>$deviceLink</td>"
 
         String statusCell
-        if (dev.currentSwitch) {
+        def deviceCapability = state.devices["$dev.id"]?.capability
+
+        // Render status icon based on selected capability, not device capabilities
+        if (deviceCapability == "Lock") {
+            def currentLock = dev.currentValue("lock")
+            String lockTitle = currentLock ? "Device is currently ${currentLock}" : "Lock device"
+            String lockIcon = currentLock == "locked" ? "lock" : "lock-open"
+            String lockColor = currentLock == "locked" ? "#4CAF50" : "#F44336"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${lockTitle}' style='color:${lockColor};font-weight:bold;text-align:center'>" +
+                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:${lockIcon}'></iconify-icon></span>" +
+                          "</td>"
+        } else if (deviceCapability == "Door") {
+            def currentDoor = dev.currentValue("door")
+            String doorTitle = currentDoor ? "Device is currently ${currentDoor}" : "Garage door/gate device"
+            String doorIcon = currentDoor == "open" ? "garage-home" : "garage"
+            String doorColor = currentDoor == "open" ? "#F44336" : "#4CAF50"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${doorTitle}' style='color:${doorColor};font-weight:bold;text-align:center'>" +
+                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:${doorIcon}'></iconify-icon></span>" +
+                          "</td>"
+        } else if (deviceCapability == "Button") {
+            // Button device status - buttons don't have on/off state, show neutral icon
+            String buttonTitle = "Button device"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${buttonTitle}' style='color:#2196F3;font-weight:bold;text-align:center'>" +
+                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:radio-button-checked'></iconify-icon></span>" +
+                          "</td>"
+        } else if (deviceCapability == "Dimmer") {
             String levelDisplay = ""
             String levelTitleSuffix = ""
-            if (dev.capabilities.find { it.name == "SwitchLevel" }) {
-                def currentLevel = dev.currentValue("level")
-                if (currentLevel != null) {
-                    String currentLevelPercent = "${currentLevel}%"
-                    levelDisplay = "<span style='display:block;font-size:12px;font-weight:normal;margin-top:2px'>${currentLevelPercent}</span>"
-                    levelTitleSuffix = " at ${currentLevelPercent}"
-                }
+            def currentLevel = dev.currentValue("level")
+            if (currentLevel != null) {
+                String currentLevelPercent = "${currentLevel}%"
+                levelDisplay = "<span style='display:block;font-size:12px;font-weight:normal;margin-top:2px'>${currentLevelPercent}</span>"
+                levelTitleSuffix = " at ${currentLevelPercent}"
             }
-            String switchTitle = "Device is currently ${dev.currentSwitch}${levelTitleSuffix}"
-            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${switchTitle}' style='color:${dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'};font-weight:bold;text-align:center'>" +
-                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:${dev.currentSwitch == 'on' ? 'circle' : 'do-not-disturb-on-outline'}'></iconify-icon></span>" +
+            String switchColor = dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'
+            String switchIcon = dev.currentSwitch == 'on' ? 'lightbulb' : 'lightbulb-outline'
+            String switchTitle = "Device is currently ${dev.currentSwitch ?: 'unknown'}${levelTitleSuffix}"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${switchTitle}' style='color:${switchColor};font-weight:bold;text-align:center'>" +
+                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:${switchIcon}'></iconify-icon></span>" +
                           levelDisplay +
                           "</td>"
-        } else if (dev.currentValve) {
-            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' style='color:${dev.currentValve == 'open' ? '#4CAF50' : '#F44336'};font-weight:bold'><iconify-icon icon='material-symbols:do-not-disturb-on-outline'></iconify-icon></td>"
+        } else if (deviceCapability == "Switch") {
+            String switchColor = dev.currentSwitch == 'on' ? '#4CAF50' : '#F44336'
+            String switchIcon = dev.currentSwitch == 'on' ? 'toggle-on' : 'toggle-off'
+            String switchTitle = "Device is currently ${dev.currentSwitch ?: 'unknown'}"
+            statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount' title='${switchTitle}' style='color:${switchColor};font-weight:bold;text-align:center'>" +
+                          "<span style='display:block;font-size:24px'><iconify-icon icon='material-symbols:${switchIcon}'></iconify-icon></span>" +
+                          "</td>"
         } else {
             statusCell = "<td ${spanClassAttr} rowspan='$scheduleCount'></td>"
         }
@@ -1319,6 +1443,12 @@ String renderScheduleTableMarkup() {
         }
         if (dev.capabilities.find { it.name in ["PushableButton", "HoldableButton", "DoubleTapableButton", "ReleasableButton"] }) {
             supportedCapabilities.add("Button")
+        }
+        if (dev.capabilities.find { it.name == "Lock" }) {
+            supportedCapabilities.add("Lock")
+        }
+        if (dev.capabilities.find { it.name == "GarageDoorControl" }) {
+            supportedCapabilities.add("Door")
         }
 
         String capabilityCell
@@ -1443,6 +1573,22 @@ String renderScheduleTableMarkup() {
                 def actionSelect = "<select id='buttonAction|${deviceAndScheduleId}' onchange=\"buttonActionChange('${dev.id}','${scheduleId}',this.value)\">${actionOptions}</select>"
 
                 desiredStateButton = "${actionSelect}<br>${buttonSelect}"
+                desiredLevelButton = ""
+            } else if (state.devices["$dev.id"].capability == "Lock") {
+                // For lock devices, show lock/unlock dropdown
+                def lockAction = schedule.lockAction ?: "lock"
+                def lockOptions = ["lock", "unlock"].collect { a -> "<option value='${a}' ${a==lockAction?'selected':''}>${a}</option>" }.join('')
+                def lockSelect = "<select id='lockAction|${deviceAndScheduleId}' onchange=\"lockActionChange('${dev.id}','${scheduleId}',this.value)\">${lockOptions}</select>"
+
+                desiredStateButton = lockSelect
+                desiredLevelButton = ""
+            } else if (state.devices["$dev.id"].capability == "Door") {
+                // For garage door/gate devices, show open/close dropdown
+                def doorAction = schedule.doorAction ?: "close"
+                def doorOptions = ["open", "close"].collect { a -> "<option value='${a}' ${a==doorAction?'selected':''}>${a}</option>" }.join('')
+                def doorSelect = "<select id='doorAction|${deviceAndScheduleId}' onchange=\"doorActionChange('${dev.id}','${scheduleId}',this.value)\">${doorOptions}</select>"
+
+                desiredStateButton = doorSelect
                 desiredLevelButton = ""
             } else {
                 desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
@@ -1720,6 +1866,26 @@ void switchHandler(data) {
                         } else {
                             logError "Cannot perform action \"${schedule.buttonAction}\" on button \"${schedule.buttonNumber}\""
                         }
+                    } else if (deviceConfig.capability == "Lock") {
+                        // Handle lock devices
+                        def lockAction = schedule.lockAction ?: "lock"
+                        if (lockAction == "lock") {
+                            device.lock()
+                            logDebug "$device locked"
+                        } else if (lockAction == "unlock") {
+                            device.unlock()
+                            logDebug "$device unlocked"
+                        }
+                    } else if (deviceConfig.capability == "Door") {
+                        // Handle garage door/gate devices
+                        def doorAction = schedule.doorAction ?: "close"
+                        if (doorAction == "open") {
+                            device.open()
+                            logDebug "$device opened"
+                        } else if (doorAction == "close") {
+                            device.close()
+                            logDebug "$device closed"
+                        }
                     } else if (schedule.desiredState == "on") {
                         if (deviceConfig.capability == "Dimmer") {
                             if (activateOnBeforeLevelBool) {
@@ -1799,6 +1965,8 @@ void appButtonHandler(btn) {
     else if (btn.startsWith("setCapabilityDimmer|")) state.setCapabilityDimmer = btn.minus("setCapabilityDimmer|")
     else if (btn.startsWith("setCapabilitySwitch|")) state.setCapabilitySwitch = btn.minus("setCapabilitySwitch|")
     else if (btn.startsWith("setCapabilityButton|")) state.setCapabilityButton = btn.minus("setCapabilityButton|")
+    else if (btn.startsWith("setCapabilityLock|")) state.setCapabilityLock = btn.minus("setCapabilityLock|")
+    else if (btn.startsWith("setCapabilityDoor|")) state.setCapabilityDoor = btn.minus("setCapabilityDoor|")
     else if (btn.startsWith("desiredState|")) state.desiredState = btn.minus("desiredState|")
     else if (btn.startsWith("useVariableTimeUnChecked|")) state.useVariableTimeUnChecked = btn.minus("useVariableTimeUnChecked|")
     else if (btn.startsWith("useVariableTimeChecked|")) state.useVariableTimeChecked = btn.minus("useVariableTimeChecked|")
@@ -2092,6 +2260,26 @@ private restoreState(shouldUpdate = false) {
                     } else {
                         logError "Cannot restore button action for $dev - invalid button configuration (action: ${mostRecentSchedule.buttonAction}, number: ${mostRecentSchedule.buttonNumber})"
                     }
+                } else if (deviceConfig.capability == "Lock") {
+                    // Restore lock state
+                    def lockAction = mostRecentSchedule.lockAction ?: "lock"
+                    if (lockAction == "lock") {
+                        dev.lock()
+                        logDebug "$dev restored: locked"
+                    } else if (lockAction == "unlock") {
+                        dev.unlock()
+                        logDebug "$dev restored: unlocked"
+                    }
+                } else if (deviceConfig.capability == "Door") {
+                    // Restore garage door/gate state
+                    def doorAction = mostRecentSchedule.doorAction ?: "close"
+                    if (doorAction == "open") {
+                        dev.open()
+                        logDebug "$dev restored: opened"
+                    } else if (doorAction == "close") {
+                        dev.close()
+                        logDebug "$dev restored: closed"
+                    }
                 } else if (mostRecentSchedule.desiredState == "on") {
                     if (deviceConfig.capability == "Dimmer") {
                         if (activateOnBeforeLevelBool) {
@@ -2122,11 +2310,31 @@ private void turnOffDevicesForModeRestriction() {
             return
         }
 
+        // Skip buttons - they don't have an "off" state
         if (deviceConfig.capability == "Button") {
             logDebug "Skipping turn off for $dev - device is configured as a button"
             return
         }
 
+        // Handle locks - lock them when mode changes to unselected
+        if (deviceConfig.capability == "Lock") {
+            if (dev.hasCommand("lock")) {
+                dev.lock()
+                logDebug "$dev locked due to mode restriction"
+            }
+            return
+        }
+
+        // Handle garage doors/gates - close them when mode changes to unselected
+        if (deviceConfig.capability == "Door") {
+            if (dev.hasCommand("close")) {
+                dev.close()
+                logDebug "$dev closed due to mode restriction"
+            }
+            return
+        }
+
+        // Handle switches and dimmers
         if (dev.hasCommand("off")) {
             dev.off()
             logDebug "$dev turned off due to mode restriction"
@@ -2310,6 +2518,8 @@ static LinkedHashMap<String, Object> generateDefaultSchedule() {
             variableTime   : null,
             buttonNumber   : null,
             buttonAction   : null,
+            lockAction     : "lock",      // For lock devices: "lock" or "unlock"
+            doorAction     : "close",     // For garage door/gate devices: "open" or "close"
             restore        : true,
             earlierLater   : "select",
             skipComparison : "select",
