@@ -72,10 +72,11 @@
  *                     - Bug fix for c-5 hub: prevent page refresh when popup is opened
  *  3.5.0 - 2025-11-17 - Add advanced option to turn off devices when mode changes to an unselected mode
  *                     - Add advanced option to restore devices to latest schedule when mode changes to a selected mode
- *  3.6.0 - 2025-01-09 - Add support for restoring button devices after hub reboot and mode changes
+ *  3.6.0 - 2025-02-04 - Add support for restoring button devices after hub reboot and mode changes
  *                     - Add support for lock devices (lock/unlock actions)
  *                     - Add support for garage door/gate devices (open/close actions)
  *                     - Advanced option for locks to auto-lock and doors to auto-close when mode changes to unselected mode
+ *                     - Bug fix for curent level is greater/less than desired level - Runs were skipped if switch was off
  */
 
 import groovy.json.JsonOutput
@@ -91,16 +92,16 @@ def titleVersion() {
 }
 
 definition(
-        name: "Schedule Manager (Child App)",
-        label: "Schedule Manager Instance",
-        namespace: "evcallia",
-        author: "Evan Callia",
-        description: "Child app for schedule manager",
-        category: "Control",
-        parent: "evcallia:Schedule Manager",
-        iconUrl: "",
-        iconX2Url: "",
-        oauth: true
+    name: "Schedule Manager (Child App)",
+    label: "Schedule Manager Instance",
+    namespace: "evcallia",
+    author: "Evan Callia",
+    description: "Child app for schedule manager",
+    category: "Control",
+    parent: "evcallia:Schedule Manager",
+    iconUrl: "",
+    iconX2Url: "",
+    oauth: true
 )
 preferences { page(name: "mainPage") }
 
@@ -1848,10 +1849,12 @@ void switchHandler(data) {
 
                             Integer currentLevel = toInt(device?.currentValue("level"))
                             Integer desiredLevel = toInt(schedule.desiredLevel)
+                            String currentSwitch = device?.currentValue("switch")
 
-                            if (currentLevel != null && desiredLevel != null) {
-                                boolean skipRun = (comparison == "greater" && currentLevel > desiredLevel) ||
-                                                  (comparison == "less" && currentLevel < desiredLevel)
+                            if (currentLevel != null && desiredLevel != null && currentSwitch != null) {
+                                boolean skipRun = currentSwitch == "on" &&
+                                                  ((comparison == "greater" && currentLevel > desiredLevel) ||
+                                                  (comparison == "less" && currentLevel < desiredLevel))
                                 if (skipRun) {
                                     logDebug "Skipping run for Device: $device; schedule: $schedule - current level $currentLevel ${comparison == 'greater' ? '>' : '<'} desired level $desiredLevel"
                                     return
