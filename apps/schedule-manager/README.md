@@ -1,24 +1,24 @@
 # Schedule manager
 
 ## Overview
-This app allows users to configure a time table, per device, and schedule the desired state for each configured time. 
-Users can select any number of switches/dimmers/buttons, schedule them based on a set time, hub variable or sunrise/set (with offset), 
-and configure the desired state/action for that time. Additionally, users can pause the schedule for individual times. 
-Advanced options include only running for desired modes or when a specific switch is set in addition to the ability 
-to manually pause all schedules.
+This app allows users to configure a time table, per device, and schedule the desired 
+state for each configured time. The goal of this app is to have a simplified view 
+that makes it easy to schedule devices.
+
+See below for features and advanced options
 
 ## Features
-- Schedule any number of switches/dimmers/buttons
+- Schedule any number of switches/dimmers/buttons/locks/garage doors
 - Schedules based on selected time or sunrise/set with offset
 - Schedules based on Hub Variable time (date, time or datetime)
 - Individual schedules may be paused
-- Set desired state for switch/dimmer to be in at specified time
+- Set desired state for device to be in at specified time
 
 ## Advanced Options
 1. [Optional] Configure modes for which the schedule should apply
    - [Optional] Turn off devices when mode changes to an unselected mode
    - [Optional] Restore devices to latest schedule when mode changes to a selected mode
-2. [Optional] Configure a switch which must be set for a schedule to be applied 
+2. [Optional] Configure a switch which must be set for a schedule to be applied
 3. [Optional] Turn "on" devices before issuing "setLevel" command.
    - Useful when a device doesn't turn on via a setLevel command
 4. [Optional] Pause all schedule
