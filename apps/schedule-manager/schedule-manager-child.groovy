@@ -33,10 +33,6 @@
  *
  * =======================================================================================
  *
- *  LOCAL MODIFICATION NOTICE:
- *  This derivative adds native WindowShade scheduling support while retaining the original
- *  Schedule Manager parent/child identity for drop-in replacement compatibility.
- *
  *  Changelog:
  *
  *  1.0.0 - 2024-11-18 - Initial release
