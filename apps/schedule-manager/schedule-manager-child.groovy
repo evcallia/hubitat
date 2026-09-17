@@ -84,12 +84,13 @@
  *  3.6.1 - 2026-06-09 - Sort hub variable options alphabetically
  *                     - Bug fix for restoring state when "current level is greater/less than desired level" is set
  *                     - Add safeguard for when "only run schedules during selected mode" is set but no modes are selected
- *  3.6.1-shades.1 - 2026-08-25 - Community modification: native WindowShade support
- *                     - Select WindowShade devices directly
- *                     - Schedule shade position (0-100) with setPosition()
- *                     - Display current shade position/state
+ *  3.7.0 - 2026-09-17 - Community modification: Add native WindowShade support
+ *                     - Support for WindowShade devices
  *                     - Support shade position comparisons and restore-after-boot/mode-change
  *                     - Close shades when mode-restriction shutdown is enabled
+ *                     - Copy schedules or link them across compatible devices for synchronized editing
+ *                     - Show linked-group membership
+ *                     - Fix null pointer 'only run when switch is set' is set with no switch selected
  */
 
 import groovy.json.JsonOutput
@@ -100,8 +101,8 @@ import java.util.Calendar
 import org.quartz.CronExpression
 
 def titleVersion() {
-    state.name = "Schedule Manager + Shades"
-    state.version = "3.6.1-shades.1"
+    state.name = "Schedule Manager"
+    state.version = "3.7.0"
 }
 
 definition(
@@ -206,6 +207,7 @@ def mainPage() {
                 devicesToRemove.each { deviceId ->
                     state.devices.remove(deviceId)
                 }
+                if (devicesToRemove) clearOrphanedLinkGroups()
 
                 paragraph displayTable()
             }
@@ -314,6 +316,10 @@ mappings {
 
     path("/getScheduleTable") {
         action: [GET: "getScheduleTable"]
+    }
+
+    path("/getLinkedScheduleGroup") {
+        action: [GET: "getLinkedScheduleGroup"]
     }
 
     path("/getCopyTargetDevices") {
@@ -474,6 +480,66 @@ def getScheduleTable() {
     render contentType: "text/html", data: renderScheduleTableMarkup()
 }
 
+// Returns the members of a linked schedule group for the read-only details popup.
+// The UI's short A/B/C labels are intentionally page-local; linkGroup remains the
+// only persisted identity for a group.
+def getLinkedScheduleGroup() {
+    String deviceId = params.deviceId?.toString()
+    String scheduleId = params.scheduleId?.toString()
+    def sourceSchedule = state.devices[deviceId]?.schedules?.get(scheduleId)
+    String linkGroup = sourceSchedule?.linkGroup?.toString()
+    List members = []
+
+    if (linkGroup) {
+        state.devices.each { memberDeviceId, memberConfig ->
+            memberConfig.schedules?.each { memberScheduleId, memberSchedule ->
+                if (memberSchedule?.linkGroup?.toString() == linkGroup) {
+                    def memberDevice = devices.find { it.id?.toString() == memberDeviceId?.toString() }
+                    members << [
+                            device : memberDevice?.toString() ?: memberDeviceId.toString(),
+                            time   : getLinkedScheduleTimeLabel(memberSchedule),
+                            current: memberDeviceId?.toString() == deviceId && memberScheduleId?.toString() == scheduleId
+                    ]
+                }
+            }
+        }
+    }
+
+    members.sort { a, b ->
+        int deviceComparison = a.device.toString().toLowerCase() <=> b.device.toString().toLowerCase()
+        deviceComparison != 0 ? deviceComparison : a.time.toString() <=> b.time.toString()
+    }
+
+    render contentType: "application/json", data: JsonOutput.toJson([
+            success: linkGroup != null,
+            members: members
+    ])
+}
+
+private String getLinkedScheduleTimeLabel(Map schedule) {
+    try {
+        def effectiveInfo = getEffectiveTimeConfig(schedule)
+        Map config = effectiveInfo?.config ?: [:]
+        String time = config.startTime ? formatTimeAmPm(getTimeFromDateTimeString(config.startTime.toString())) : "Select"
+        String prefix = ""
+
+        if (config.useVariableTime) {
+            prefix = config.variableTime ? "${config.variableTime}: " : "Hub variable: "
+        } else if (config.sunTime) {
+            int offset = toIntOrNull(config.offset) ?: 0
+            String offsetLabel = offset == 0 ? "" : " ${offset > 0 ? '+' : ''}${offset} min"
+            prefix = "${config.sunset ? 'Sunset' : 'Sunrise'}${offsetLabel}: "
+        }
+
+        String timeNumber = (dualTimeBool && ["earlier", "later"].contains(schedule.earlierLater?.toString()?.toLowerCase())) ?
+                (effectiveInfo?.isSecondary ? " (Time 2)" : " (Time 1)") : ""
+        return "${prefix}${time}${timeNumber}"
+    } catch (Exception e) {
+        logError "Unable to format linked schedule time: ${e.message}"
+        return "Time unavailable"
+    }
+}
+
 // Returns other configured devices that share the source device's capability type,
 // so a schedule's fields (desiredState/desiredLevel/buttonAction/etc.) stay meaningful
 // when copied. Used to populate the "Copy Schedule" popup.
@@ -506,6 +572,52 @@ private LinkedHashMap<String, Object> cloneScheduleForCopy(Map source) {
     return copy
 }
 
+private List<String> getSupportedButtonActions(buttonDevice) {
+    return buttonDevice?.getSupportedCommands()?.collect { it.toString() }?.intersect(["doubleTap", "hold", "push", "release"]) ?: []
+}
+
+// New schedules do not know their device's supported button commands when their
+// defaults are created. Persist the first command shown by the UI so copying or
+// executing the schedule uses the same action the user sees selected.
+private void ensureButtonScheduleDefaults(Map schedule, buttonDevice) {
+    if (!schedule) return
+
+    if (schedule.buttonNumber == null) {
+        schedule.buttonNumber = 1
+    }
+    if (!schedule.buttonAction || schedule.buttonAction == "No commands found") {
+        List<String> supportedActions = getSupportedButtonActions(buttonDevice)
+        if (supportedActions) {
+            schedule.buttonAction = supportedActions[0]
+        }
+    }
+}
+
+// Button devices can expose different commands and numbers of buttons even though
+// they share the same Hubitat capability. Return a useful reason instead of copying
+// or executing a schedule that the target device cannot support.
+private String getButtonScheduleValidationError(Map schedule, targetDevice) {
+    String action = schedule?.buttonAction?.toString()
+    Integer buttonNumber = toIntOrNull(schedule?.buttonNumber)
+
+    if (!action || action == "No commands found") {
+        return "no supported button action is selected"
+    }
+    if (!targetDevice?.hasCommand(action)) {
+        return "does not support the '${action}' command"
+    }
+    if (buttonNumber == null || buttonNumber < 1) {
+        return "does not have a valid button number"
+    }
+
+    Integer buttonCount = toIntOrNull(targetDevice.currentValue("numberOfButtons"))
+    if (buttonCount != null && buttonNumber > buttonCount) {
+        return "has ${buttonCount} button${buttonCount == 1 ? '' : 's'}, but the schedule uses button ${buttonNumber}"
+    }
+
+    return null
+}
+
 // If this schedule is linked to others (shares a linkGroup), mirror every field
 // from it onto its linked siblings on other devices, so multiple devices can be
 // driven by what is effectively one shared, editable schedule. Devices keep their
@@ -526,6 +638,59 @@ private void syncLinkedSchedules(String deviceId, String scheduleId) {
                 otherConfig.schedules[otherScheduleId] = mirrored
             }
         }
+    }
+}
+
+// A linkGroup only represents a link while at least two schedules share it. Clear
+// singleton groups after a member is removed so the final schedule no longer shows
+// as linked and a future copy starts a fresh group.
+private void clearOrphanedLinkGroups() {
+    Map<String, Integer> memberCounts = [:]
+    state.devices?.each { countDeviceId, countDeviceConfig ->
+        countDeviceConfig.schedules?.each { countScheduleId, countSchedule ->
+            if (countSchedule?.linkGroup) {
+                String linkGroup = countSchedule.linkGroup.toString()
+                memberCounts[linkGroup] = (memberCounts[linkGroup] ?: 0) + 1
+            }
+        }
+    }
+
+    Set<String> orphanedGroups = [] as Set
+    memberCounts.each { linkGroup, memberCount ->
+        if (memberCount < 2) orphanedGroups << linkGroup
+    }
+    if (!orphanedGroups) return
+
+    int clearedCount = 0
+    state.devices?.each { cleanupDeviceId, cleanupDeviceConfig ->
+        cleanupDeviceConfig.schedules?.each { cleanupScheduleId, cleanupSchedule ->
+            if (cleanupSchedule?.linkGroup && orphanedGroups.contains(cleanupSchedule.linkGroup.toString())) {
+                cleanupSchedule.linkGroup = null
+                clearedCount++
+            }
+        }
+    }
+    logDebug "Cleared ${clearedCount} orphaned linked schedule group member(s)"
+}
+
+// A linked group is only valid while all participating devices use the same
+// selected capability. If this device's capability changes, detach its schedules
+// before applying the new type so later edits cannot mirror incompatible fields.
+private void unlinkDeviceSchedulesForCapabilityChange(String deviceId, String newCapability) {
+    def deviceConfig = state.devices?.get(deviceId)
+    if (!deviceConfig || deviceConfig.capability == newCapability) return
+
+    int unlinkedCount = 0
+    deviceConfig.schedules?.each { _, schedule ->
+        if (schedule?.linkGroup) {
+            schedule.linkGroup = null
+            unlinkedCount++
+        }
+    }
+
+    if (unlinkedCount > 0) {
+        clearOrphanedLinkGroups()
+        logDebug "Unlinked ${unlinkedCount} schedule(s) for device ${deviceId} before changing capability from ${deviceConfig.capability} to ${newCapability}"
     }
 }
 
@@ -551,27 +716,60 @@ def copyScheduleToDevices() {
         return
     }
 
+    if (sourceCapability == "Button") {
+        def sourceDevice = devices?.find { it.id?.toString() == sourceDeviceId?.toString() }
+        ensureButtonScheduleDefaults(sourceSchedule, sourceDevice)
+    }
+
     // Reuse the source's existing linkGroup if it's already linked, so joining more
     // devices doesn't fork off a second, disconnected group.
     String linkGroup = link ? (sourceSchedule.linkGroup ?: UUID.randomUUID().toString()) : null
-    if (link) {
+
+    int copiedCount = 0
+    List skippedTargets = []
+    targetDeviceIds.each { targetId ->
+        def targetConfig = state.devices[targetId]
+        def targetDevice = devices.find { it.id == targetId }
+        String targetName = targetDevice?.toString() ?: targetId.toString()
+
+        // Only copy onto devices of the same capability, to keep fields meaningful
+        // (e.g. don't push a Shade position onto a Lock, or a Dimmer level onto a Button)
+        if (!targetConfig || targetConfig.capability != sourceCapability) {
+            skippedTargets << [deviceId: targetId, device: targetName, reason: "device type no longer matches the source"]
+            return
+        }
+
+        // Repeating a linked copy to a device already in this group would create a
+        // second identical cron entry and send every scheduled command twice.
+        boolean alreadyLinked = link && targetConfig.schedules?.values()?.any { schedule ->
+            schedule?.linkGroup == linkGroup
+        }
+        if (alreadyLinked) {
+            skippedTargets << [deviceId: targetId, device: targetName, reason: "already has this linked schedule"]
+            return
+        }
+
+        if (sourceCapability == "Button") {
+            String validationError = getButtonScheduleValidationError(sourceSchedule, targetDevice)
+            if (validationError) {
+                skippedTargets << [deviceId: targetId, device: targetName, reason: validationError]
+                return
+            }
+        }
+
+        def cloned = cloneScheduleForCopy(sourceSchedule)
+        cloned.linkGroup = linkGroup
+        targetConfig.schedules[UUID.randomUUID().toString()] = cloned
+        copiedCount++
+    }
+
+    // Do not make a previously independent source appear linked when every target
+    // was rejected. An existing link remains intact even if no new device was added.
+    if (link && copiedCount > 0) {
         sourceSchedule.linkGroup = linkGroup
     }
 
-    int copiedCount = 0
-    targetDeviceIds.each { targetId ->
-        def targetConfig = state.devices[targetId]
-        // Only copy onto devices of the same capability, to keep fields meaningful
-        // (e.g. don't push a Shade position onto a Lock, or a Dimmer level onto a Button)
-        if (targetConfig && targetConfig.capability == sourceCapability) {
-            def cloned = cloneScheduleForCopy(sourceSchedule)
-            cloned.linkGroup = linkGroup
-            targetConfig.schedules[UUID.randomUUID().toString()] = cloned
-            copiedCount++
-        }
-    }
-
-    render contentType: "application/json", data: JsonOutput.toJson([success: true, copied: copiedCount, linked: link])
+    render contentType: "application/json", data: JsonOutput.toJson([success: true, copied: copiedCount, linked: link && sourceSchedule.linkGroup != null, skipped: skippedTargets])
 }
 
 //****  JS for Table  ****//
@@ -678,6 +876,39 @@ String loadCSS() {
             }
             .schedule-run-indicator iconify-icon {
                 font-size: 14px;
+            }
+            .link-group-badge {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 24px;
+                height: 24px;
+                padding: 0 6px;
+                border: 1px solid #90CAF9;
+                border-radius: 12px;
+                color: #0D47A1;
+                background-color: #E3F2FD;
+                font-size: 12px;
+                font-weight: 700;
+                line-height: 1;
+                cursor: pointer;
+                vertical-align: middle;
+            }
+            .link-group-badge:hover {
+                background-color: #BBDEFB;
+            }
+            .link-controls {
+                display: inline-flex;
+                align-items: center;
+                justify-content: center;
+                gap: 3px;
+                white-space: nowrap;
+            }
+            .link-controls > div {
+                display: inline-block;
+            }
+            .link-controls > .form-group {
+                display: none !important;
             }
             .mdl-cell .mdl-textfield div {
               white-space: normal !important;
@@ -801,19 +1032,20 @@ String loadScript() {
 
                 const cancelBtn = document.createElement('button');
                 cancelBtn.className = 'popup-btn popup-btn-secondary';
-                cancelBtn.innerText = 'Cancel';
+                cancelBtn.innerText = submitCallback ? 'Cancel' : 'Close';
                 cancelBtn.onclick = hidePopup;
-
-                const submitBtn = document.createElement('button');
-                submitBtn.className = 'popup-btn popup-btn-primary';
-                submitBtn.innerText = 'Submit';
-                submitBtn.onclick = function() {
-                    submitCallback(overlay);
-                };
 
                 // Build popup structure
                 buttonsEl.appendChild(cancelBtn);
-                buttonsEl.appendChild(submitBtn);
+                if (submitCallback) {
+                    const submitBtn = document.createElement('button');
+                    submitBtn.className = 'popup-btn popup-btn-primary';
+                    submitBtn.innerText = 'Submit';
+                    submitBtn.onclick = function() {
+                        submitCallback(overlay);
+                    };
+                    buttonsEl.appendChild(submitBtn);
+                }
 
                 container.appendChild(closeBtn);
                 container.appendChild(titleEl);
@@ -842,6 +1074,50 @@ String loadScript() {
                         overlay.remove();
                     }, 300);
                 });
+            }
+
+            function escapeHtml(value) {
+                const element = document.createElement('div');
+                element.textContent = value == null ? '' : String(value);
+                return element.innerHTML;
+            }
+
+            function linkedScheduleGroupPopup(deviceId, scheduleId, groupLabel) {
+                const url = '/apps/api/${app.id}/getLinkedScheduleGroup?access_token=${state.accessToken}' +
+                    '&deviceId=' + encodeURIComponent(deviceId) + '&scheduleId=' + encodeURIComponent(scheduleId) +
+                    '&_=' + Date.now();
+
+                fetch(url)
+                    .then(response => {
+                        if (!response.ok) throw new Error('Request failed with status ' + response.status);
+                        return response.json();
+                    })
+                    .then(result => {
+                        const members = Array.isArray(result.members) ? result.members : [];
+                        let content = '<p style="font-size:13px;color:#616161;margin:0 0 12px">Schedules in this group stay synchronized.</p>';
+
+                        if (members.length === 0) {
+                            content += '<p style="font-size:13px;color:#757575">No linked schedules were found.</p>';
+                        } else {
+                            content += '<div style="border:1px solid #E0E0E0;border-radius:4px;overflow:hidden">';
+                            members.forEach((member, index) => {
+                                const background = member.current ? 'background:#E3F2FD;' : '';
+                                const border = index > 0 ? 'border-top:1px solid #EEEEEE;' : '';
+                                const currentLabel = member.current ? ' <span style="font-size:11px;color:#1565C0">(this schedule)</span>' : '';
+                                content += '<div style="display:flex;justify-content:space-between;gap:16px;padding:9px 10px;' + background + border + '">' +
+                                    '<span style="text-align:left;font-weight:' + (member.current ? '600' : '400') + '">' + escapeHtml(member.device) + currentLabel + '</span>' +
+                                    '<span style="text-align:right;color:#616161;white-space:nowrap">' + escapeHtml(member.time) + '</span>' +
+                                    '</div>';
+                            });
+                            content += '</div>';
+                        }
+
+                        showPopup('Linked Schedule Group ' + groupLabel, content, null);
+                    })
+                    .catch(error => {
+                        console.error('Error fetching linked schedule group:', error);
+                        showPopup('Linked Schedule Group ' + groupLabel, '<p style="color:#C62828">Unable to load linked schedules.</p>', null);
+                    });
             }
 
             function refreshScheduleTable() {
@@ -1092,6 +1368,11 @@ String loadScript() {
                                 });
                                 xhr.onreadystatechange = function() {
                                     if (xhr.readyState === 4 && xhr.status === 200) {
+                                        const result = JSON.parse(xhr.responseText);
+                                        if (Array.isArray(result.skipped) && result.skipped.length > 0) {
+                                            const details = result.skipped.map(entry => '- ' + entry.device + ': ' + entry.reason).join('\\n');
+                                            window.alert('Some targets were skipped:\\n' + details);
+                                        }
                                         refreshScheduleTable();
                                     }
                                 };
@@ -1377,6 +1658,7 @@ String displayTable() {
     if (state.removeRunTime){
         def (deviceId, scheduleId) = state.removeRunTime.tokenize('|')
         state.devices[deviceId].schedules.remove(scheduleId)
+        clearOrphanedLinkGroups()
 
         if (state.devices[deviceId].schedules.size() == 0) {
             state.devices[deviceId].schedules[UUID.randomUUID().toString()] = generateDefaultSchedule()
@@ -1424,6 +1706,7 @@ String displayTable() {
         def schedule = state.devices[deviceId]?.schedules?.get(scheduleId)
         if (schedule) {
             schedule.linkGroup = null
+            clearOrphanedLinkGroups()
         }
         state.remove("unlinkSchedule")
     }
@@ -1431,6 +1714,7 @@ String displayTable() {
     // Type/Capability
     if (state.setCapabilityShade) {
         def deviceId = state.setCapabilityShade
+        unlinkDeviceSchedulesForCapabilityChange(deviceId, "Shade")
         state.devices[deviceId].capability = "Shade"
         state.devices[deviceId].schedules.each { _, sched ->
             if (!sched.containsKey('skipComparison') || sched.skipComparison == null || sched.skipComparison == "-") {
@@ -1442,6 +1726,7 @@ String displayTable() {
 
     if (state.setCapabilityDimmer) {
         def deviceId = state.setCapabilityDimmer
+        unlinkDeviceSchedulesForCapabilityChange(deviceId, "Dimmer")
         state.devices[deviceId].capability = "Dimmer"
         state.devices[deviceId].schedules.each { _, sched ->
             if (!sched.containsKey('skipComparison') || sched.skipComparison == null || sched.skipComparison == "-") {
@@ -1453,6 +1738,7 @@ String displayTable() {
 
     if (state.setCapabilitySwitch) {
         def deviceId = state.setCapabilitySwitch
+        unlinkDeviceSchedulesForCapabilityChange(deviceId, "Switch")
         state.devices[deviceId].capability = "Switch"
         state.devices[deviceId].schedules.each { _, sched ->
             sched.skipComparison = "-"
@@ -1462,6 +1748,7 @@ String displayTable() {
 
     if (state.setCapabilityButton) {
         def deviceId = state.setCapabilityButton
+        unlinkDeviceSchedulesForCapabilityChange(deviceId, "Button")
         state.devices[deviceId].capability = "Button"
         state.devices[deviceId].schedules.each { _, sched ->
             sched.skipComparison = "-"
@@ -1471,6 +1758,7 @@ String displayTable() {
 
     if (state.setCapabilityLock) {
         def deviceId = state.setCapabilityLock
+        unlinkDeviceSchedulesForCapabilityChange(deviceId, "Lock")
         state.devices[deviceId].capability = "Lock"
         state.devices[deviceId].schedules.each { _, sched ->
             sched.skipComparison = "-"
@@ -1480,6 +1768,7 @@ String displayTable() {
 
     if (state.setCapabilityDoor) {
         def deviceId = state.setCapabilityDoor
+        unlinkDeviceSchedulesForCapabilityChange(deviceId, "Door")
         state.devices[deviceId].capability = "Door"
         state.devices[deviceId].schedules.each { _, sched ->
             sched.skipComparison = "-"
@@ -1511,6 +1800,28 @@ String displayTable() {
 }
 
 String renderScheduleTableMarkup() {
+    // Also cleans up singleton groups left behind by versions before orphan
+    // handling was added.
+    clearOrphanedLinkGroups()
+
+    // Give each persisted linkGroup a compact label for this table render. Deriving
+    // labels from the stored device/schedule order keeps them steady when a time edit
+    // re-sorts table rows, without adding state that needs migration or cleanup.
+    Map<String, String> linkGroupLabels = [:]
+    Map<String, Integer> linkGroupCounts = [:]
+    int nextLinkGroupIndex = 0
+    state.devices.each { groupDeviceId, deviceConfig ->
+        deviceConfig.schedules?.each { groupScheduleId, schedule ->
+            if (schedule?.linkGroup) {
+                String linkGroup = schedule.linkGroup.toString()
+                if (!linkGroupLabels.containsKey(linkGroup)) {
+                    linkGroupLabels[linkGroup] = getLinkGroupDisplayLabel(nextLinkGroupIndex++)
+                }
+                linkGroupCounts[linkGroup] = (linkGroupCounts[linkGroup] ?: 0) + 1
+            }
+        }
+    }
+
     // Configure table
     String str = """
         <div style='overflow-x:auto'><table class='mdl-data-table'>
@@ -1822,18 +2133,20 @@ String renderScheduleTableMarkup() {
             String copyToCellContent = copyScheduleButton
             String copyToCellTitle = "Copy this schedule to other devices of the same type"
             if (schedule.linkGroup) {
+                String linkGroup = schedule.linkGroup.toString()
+                String groupLabel = linkGroupLabels[linkGroup]
+                int linkedScheduleCount = linkGroupCounts[linkGroup] ?: 0
+                String groupBadge = "<span class='link-group-badge' role='button' tabindex='0' title='View the ${linkedScheduleCount} schedules in linked group ${groupLabel}' onclick=\"linkedScheduleGroupPopup('${dev.id}','${scheduleId}','${groupLabel}')\" onkeydown=\"if(event.key==='Enter'||event.key===' '){event.preventDefault();linkedScheduleGroupPopup('${dev.id}','${scheduleId}','${groupLabel}')}\">${groupLabel}</span>"
                 String unlinkButton = buttonLink("unlinkSchedule|$deviceAndScheduleId", "Unlink", "#4CAF50", "20px", "<iconify-icon icon='material-symbols:link-off'></iconify-icon>")
-                copyToCellContent = "$unlinkButton $copyScheduleButton"
-                copyToCellTitle = "Linked - editing time, days, or desired value on this device (or any linked device) updates them all. Click the chain icon to unlink just this device."
+                copyToCellContent = "<div class='link-controls'>$groupBadge $unlinkButton $copyScheduleButton</div>"
+                copyToCellTitle = "Linked group ${groupLabel} (${linkedScheduleCount} schedules). Click the ${groupLabel} badge to see its members, or the chain icon to unlink just this device."
             }
             String desiredStateButton = buttonLink("desiredState|$deviceAndScheduleId", schedule.desiredState, "${schedule.desiredState == "on" ? "green" : "red"}", "15px; font-weight:bold")
             String desiredLevelButton = buttonLink("desiredLevel|$deviceAndScheduleId|${deviceCapability}", schedule.desiredLevel.toString(), "MediumBlue")
 
             // Handle button device specifics
             if (state.devices["$dev.id"].capability == "Button") {
-                if (schedule.buttonNumber == null) {
-                    schedule.buttonNumber = 1 // Default to button 1 if not set
-                }
+                ensureButtonScheduleDefaults(schedule, dev)
 
                 // For button devices, show button config instead of desired state
                 def buttonCount = dev.currentValue("numberOfButtons") ?: 1
@@ -1841,7 +2154,7 @@ String renderScheduleTableMarkup() {
                 def buttonOptions = (1..buttonCount).collect { n -> "<option value='${n}' ${n==buttonNum?'selected':''}>button ${n}</option>" }.join('')
                 def buttonSelect = "<select id='buttonNumber|${deviceAndScheduleId}' onchange=\"buttonNumberChange('${dev.id}','${scheduleId}',this.value)\">${buttonOptions}</select>"
 
-                def actions = dev.getSupportedCommands()?.collect { it.toString() }.intersect(["doubleTap", "hold", "push", "release"]) ?: ["No commands found"]
+                def actions = getSupportedButtonActions(dev) ?: ["No commands found"]
                 def actionVal = schedule.buttonAction ?: actions[0]
                 def actionOptions = actions.collect { a -> "<option value='${a}' ${a==actionVal?'selected':''}>${a}</option>" }.join('')
                 def actionSelect = "<select id='buttonAction|${deviceAndScheduleId}' onchange=\"buttonActionChange('${dev.id}','${scheduleId}',this.value)\">${actionOptions}</select>"
@@ -2078,8 +2391,45 @@ String renderScheduleTableMarkup() {
     return str
 }
 
+private String getLinkGroupDisplayLabel(int index) {
+    String alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    int value = index + 1
+    String label = ""
+    while (value > 0) {
+        value--
+        int characterIndex = value % 26
+        label = alphabet.substring(characterIndex, characterIndex + 1) + label
+        value = (int) (value / 26)
+    }
+    return label
+}
+
 
 //**** Handlers ****//
+
+// Hubitat can briefly retain the enabled preference while its selected device is
+// unavailable (for example while settings are being edited or after device removal).
+// Treat that as a failed condition instead of dereferencing a null device.
+private boolean activationSwitchConditionMet() {
+    if (!switchActivationBool) return true
+
+    if (!activationSwitch) {
+        logWarn "Activation switch condition is enabled, but no activation switch is available"
+        return false
+    }
+    if (!activationSwitchOnOff) {
+        logWarn "Activation switch condition is enabled, but no required on/off state is selected"
+        return false
+    }
+
+    String currentState = activationSwitch.currentValue("switch")?.toString()
+    if (currentState == null) {
+        logWarn "Activation switch ${activationSwitch} did not report a current switch state"
+        return false
+    }
+
+    return currentState == activationSwitchOnOff.toString()
+}
 
 void switchHandler(data) {
     if (logEnableBool) logDebug "switchHandler - data: $data"
@@ -2090,12 +2440,33 @@ void switchHandler(data) {
         return
     }
 
-    def deviceConfig = state.devices[data.deviceId]
-    def schedule = deviceConfig.schedules[data.scheduleId]
-    def device = devices.find { it.id == data.deviceId }
+    String deviceId = data?.deviceId?.toString()
+    String scheduleId = data?.scheduleId?.toString()
+    if (!deviceId || !scheduleId) {
+        logWarn "Skipping scheduled run because its device or schedule ID is missing: $data"
+        return
+    }
+
+    def deviceConfig = state.devices[deviceId]
+    if (!deviceConfig) {
+        logWarn "Skipping stale scheduled run because device configuration $deviceId no longer exists"
+        return
+    }
+
+    def schedule = deviceConfig.schedules?.get(scheduleId)
+    if (!schedule) {
+        logWarn "Skipping stale scheduled run because schedule $scheduleId for device $deviceId no longer exists"
+        return
+    }
+
+    def device = devices?.find { it.id?.toString() == deviceId }
+    if (!device) {
+        logWarn "Skipping scheduled run because device $deviceId is no longer selected or available"
+        return
+    }
 
     if ((modeBool && mode != null && mode.contains(location.mode)) || !modeBool || mode == null) {
-        if ((switchActivationBool && activationSwitch.currentSwitch == activationSwitchOnOff) || (!switchActivationBool)) {
+        if (activationSwitchConditionMet()) {
             if (!schedule.pause) { // If schedule is paused it should never be scheduled anyway. We'll still check.
                 // Check to make sure the date is correct if we're using Hub Variables
                 def effectiveConfig = getEffectiveTimeConfig(schedule).config
@@ -2151,11 +2522,13 @@ void switchHandler(data) {
                         }
                     }
                     if (deviceConfig.capability == "Button") {
-                        if (schedule.buttonNumber && schedule.buttonAction && schedule.buttonAction != "No commands found") {
+                        ensureButtonScheduleDefaults(schedule, device)
+                        String validationError = getButtonScheduleValidationError(schedule, device)
+                        if (!validationError) {
                             device."$schedule.buttonAction"(schedule.buttonNumber)
                             logDebug "$device $schedule.buttonAction $schedule.buttonNumber triggered"
                         } else {
-                            logError "Cannot perform action \"${schedule.buttonAction}\" on button \"${schedule.buttonNumber}\""
+                            logError "Cannot run button schedule for $device: $validationError (action: ${schedule.buttonAction}, number: ${schedule.buttonNumber})"
                         }
                     } else if (deviceConfig.capability == "Lock") {
                         // Handle lock devices
@@ -2205,7 +2578,8 @@ void switchHandler(data) {
                 logDebug "Schedule is paused, skipping run for Device: $device; schedule: $schedule"
             }
         } else {
-            logDebug "Switch $activationSwitch is not set to $activationSwitchOnOff, skipping run for Device: $device; schedule: $schedule"
+            String activationState = activationSwitch?.currentValue("switch")?.toString() ?: "unavailable"
+            logDebug "Switch $activationSwitch is $activationState instead of $activationSwitchOnOff, skipping run for Device: $device; schedule: $schedule"
         }
     } else {
         logDebug "Mode of $location.mode is not one of $mode, skipping run for Device: $device; schedule: $schedule"
@@ -2407,7 +2781,7 @@ def handleHubBootUp(evt) {
             return
         }
 
-        if (switchActivationBool && activationSwitch.currentSwitch != activationSwitchOnOff) {
+        if (!activationSwitchConditionMet()) {
             logDebug "Restore after boot skipped - activation switch condition not met"
             return
         }
@@ -2433,8 +2807,9 @@ def handleModeChange(evt) {
         return
     }
 
-    if (switchActivationBool && activationSwitch?.currentSwitch != activationSwitchOnOff) {
-        logDebug "Mode change handling skipped - activation switch condition not met - ${activationSwitch?.currentSwitch} is not ${activationSwitchOnOff}"
+    if (!activationSwitchConditionMet()) {
+        String activationState = activationSwitch?.currentValue("switch")?.toString() ?: "unavailable"
+        logDebug "Mode change handling skipped - activation switch condition not met - ${activationState} is not ${activationSwitchOnOff}"
         return
     }
 
@@ -2549,62 +2924,46 @@ private restoreState(shouldUpdate = false) {
                     return
                 }
 
-                // Apply schedule based on device capability
+                // Do not suppress a valid restore command merely because the current
+                // value matches. Hubitat currentValue() reflects the last reported status
+                // and may be stale after a reboot, power loss, missed device report, or
+                // physical change. The user's explicit greater/less rule remains the only
+                // current-value-based reason to skip an otherwise valid restore.
                 if (deviceConfig.capability == "Button") {
-                    // Trigger button action
-                    if (mostRecentSchedule.buttonNumber && mostRecentSchedule.buttonAction && mostRecentSchedule.buttonAction != "No commands found") {
+                    ensureButtonScheduleDefaults(mostRecentSchedule, dev)
+                    String validationError = getButtonScheduleValidationError(mostRecentSchedule, dev)
+                    if (!validationError) {
                         dev."$mostRecentSchedule.buttonAction"(mostRecentSchedule.buttonNumber)
                         logDebug "$dev restored: $mostRecentSchedule.buttonAction $mostRecentSchedule.buttonNumber triggered"
                     } else {
-                        logError "Cannot restore button action for $dev - invalid button configuration (action: ${mostRecentSchedule.buttonAction}, number: ${mostRecentSchedule.buttonNumber})"
+                        logError "Cannot restore button schedule for $dev: $validationError (action: ${mostRecentSchedule.buttonAction}, number: ${mostRecentSchedule.buttonNumber})"
                     }
                 } else if (deviceConfig.capability == "Lock") {
-                    // Restore lock state - skip if already in the desired state to avoid a redundant z-wave command
                     def lockAction = mostRecentSchedule.lockAction ?: "lock"
-                    String currentLock = dev?.currentValue("lock")
                     if (lockAction == "lock") {
-                        if (currentLock == "locked") {
-                            logDebug "Skipping restore for $dev - already locked"
-                        } else {
-                            dev.lock()
-                            logDebug "$dev restored: locked"
-                        }
+                        dev.lock()
+                        logDebug "$dev restored: locked"
                     } else if (lockAction == "unlock") {
-                        if (currentLock == "unlocked") {
-                            logDebug "Skipping restore for $dev - already unlocked"
-                        } else {
-                            dev.unlock()
-                            logDebug "$dev restored: unlocked"
-                        }
+                        dev.unlock()
+                        logDebug "$dev restored: unlocked"
                     }
                 } else if (deviceConfig.capability == "Door") {
-                    // Restore garage door/gate state - skip if already in the desired state
                     def doorAction = mostRecentSchedule.doorAction ?: "close"
-                    String currentDoor = dev?.currentValue("door")
                     if (doorAction == "open") {
-                        if (currentDoor == "open") {
-                            logDebug "Skipping restore for $dev - already open"
-                        } else {
-                            dev.open()
-                            logDebug "$dev restored: opened"
-                        }
+                        dev.open()
+                        logDebug "$dev restored: opened"
                     } else if (doorAction == "close") {
-                        if (currentDoor == "closed") {
-                            logDebug "Skipping restore for $dev - already closed"
-                        } else {
-                            dev.close()
-                            logDebug "$dev restored: closed"
-                        }
+                        dev.close()
+                        logDebug "$dev restored: closed"
                     }
                 } else if (deviceConfig.capability == "Shade") {
-                    // Restore WindowShade position directly - but skip if the shade is
-                    // already at the exact desired position, so we don't send a redundant
-                    // z-wave command on every mode change / boot if nothing actually changed.
                     Integer currentPosition = toIntOrNull(dev?.currentValue("position"))
                     Integer desiredPosition = toIntOrNull(mostRecentSchedule.desiredLevel)
-
-                    if (currentPosition != null && desiredPosition != null && currentPosition == desiredPosition) {
-                        logDebug "Skipping restore for $dev - already at position $currentPosition%"
+                    if (desiredPosition == null) {
+                        logDebug "Skipping restore for $dev - desired position is null"
+                    } else if (currentPosition == null) {
+                        logDebug "Current Position for $dev is null, will set to desired position of $desiredPosition%"
+                        dev.setPosition(desiredPosition)
                     } else {
                         boolean skipRestore = false
                         if (onlyRunWhenNotAlreadySetBool) {
@@ -2631,11 +2990,13 @@ private restoreState(shouldUpdate = false) {
                         Integer desiredLevel = toIntOrNull(mostRecentSchedule.desiredLevel)
                         String currentSwitch = dev?.currentValue("switch")
 
-                        if (currentSwitch == "on" && currentLevel != null && desiredLevel != null && currentLevel == desiredLevel) {
-                            logDebug "Skipping restore for $dev - already on at level $currentLevel"
+                        if (desiredLevel == null) {
+                            logDebug "Skipping restore for $dev - desired level is null"
                         } else {
                             boolean skipRestore = false
-                            if (onlyRunWhenNotAlreadySetBool) {
+                            if (currentLevel == null) {
+                                logDebug "Current Level for $dev is null, will set to desired level of $desiredLevel"
+                            } else if (onlyRunWhenNotAlreadySetBool) {
                                 String comparison = (mostRecentSchedule.skipComparison ?: "select").toString().toLowerCase()
                                 if (comparison == "-") {
                                     comparison = "select"
@@ -2653,25 +3014,17 @@ private restoreState(shouldUpdate = false) {
                                 if (activateOnBeforeLevelBool) {
                                     dev.on()
                                 }
-                                dev.setLevel(mostRecentSchedule.desiredLevel)
-                                logDebug "$dev restored to brightness level $mostRecentSchedule.desiredLevel"
+                                dev.setLevel(desiredLevel)
+                                logDebug "$dev restored to brightness level $desiredLevel"
                             }
                         }
                     } else {
-                        if (dev?.currentValue("switch") == "on") {
-                            logDebug "Skipping restore for $dev - already on"
-                        } else {
-                            dev.on()
-                            logDebug "$dev restored to ON"
-                        }
+                        dev.on()
+                        logDebug "$dev restored to ON"
                     }
                 } else {
-                    if (dev?.currentValue("switch") == "off") {
-                        logDebug "Skipping restore for $dev - already off"
-                    } else {
-                        dev.off()
-                        logDebug "$dev restored to OFF"
-                    }
+                    dev.off()
+                    logDebug "$dev restored to OFF"
                 }
             } else {
                 logDebug "No applicable schedule found for $dev to restore state after reboot"
@@ -2919,7 +3272,22 @@ String buttonLink(String btnName, String linkText, color = "#2196F3", font = "15
         String extraParam = extra ? ", \"${extra}\"" : ""
         return """<span role="button" id="${btnName}" onclick='event.preventDefault(); event.stopPropagation(); ${action}Popup("${deviceId}","${scheduleId}", "${linkText}"${extraParam}); return false;' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>${shown}</span>"""
     }
-    return """<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick='buttonClick(this)' style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$shown</div></div><input type='hidden' name='settings[$btnName]' value=''>"""
+
+    String clickHandler = "buttonClick(this)"
+    if (action?.startsWith("setCapability") && deviceId) {
+        int linkedScheduleCount = 0
+        state.devices?.get(deviceId)?.schedules?.each { capabilityScheduleId, capabilitySchedule ->
+            if (capabilitySchedule?.linkGroup) linkedScheduleCount++
+        }
+
+        if (linkedScheduleCount > 0) {
+            String scheduleLabel = linkedScheduleCount == 1 ? "1 linked schedule" : "${linkedScheduleCount} linked schedules"
+            String groupLabel = linkedScheduleCount == 1 ? "its linked group" : "their linked groups"
+            clickHandler = "event.preventDefault(); event.stopPropagation(); if (window.confirm('Changing the device type will unlink ${scheduleLabel} from ${groupLabel}. Continue?')) { buttonClick(this); } return false;"
+        }
+    }
+
+    return """<div class='form-group'><input type='hidden' name='${btnName}.type' value='button'></div><div><div class='submitOnChange' onclick="${clickHandler}" style='color:$color;cursor:pointer;font-size:$font;font-weight:500;padding:2px 4px;border-radius:4px;transition:all 0.3s ease;display:inline-block'>$shown</div></div><input type='hidden' name='settings[$btnName]' value=''>"""
 }
 
 // Generate a new, empty schedule
