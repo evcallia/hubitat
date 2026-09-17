@@ -8,6 +8,11 @@ Feel free to request features and I may or may not get to them. You're always we
 
 ## Available Apps
 
+### Schedule Manager
+- Timetable-based scheduling for switches, dimmers, window shades, buttons, locks, and garage doors.
+- Supports static, sunrise/sunset, and Hub Variable times; copied or synchronized schedules across compatible devices.
+- Configuration, installation, and usage details are documented in [`apps/schedule-manager/README.md`](apps/schedule-manager/README.md).
+
 ### Laundry Notifications
 - Parent/child app that monitors a laundry machine's vibration sensor.
 - Reads a hub variable (String) that stores the name of the person to notify.
