@@ -1,10 +1,10 @@
 {
   "packageName": "Schedule Manager",
   "author": "Evan Callia",
-  "version": "3.6.1",
-  "releaseNotes": "- Sort hub variable options alphabetically\n- Bug fix for restoring state when 'current level is greater/less than desired level' is set\n- Add safeguard for when 'only run schedules during selected mode' is set but no modes are selected",
+  "version": "3.7.0",
+  "releaseNotes": "- Community modification: Add native WindowShade support \n- Support for WindowShade devices \n- Support shade position comparisons and restore-after-boot/mode-change \n- Close shades when mode-restriction shutdown is enabled \n- Copy schedules or link them across compatible devices for synchronized editing \n- Show linked-group membership \n- Fix null pointer 'only run when switch is set' is set with no switch selected",
   "minimumHEVersion": "0.0.0",
-  "dateReleased": "2024-11-18",
+  "dateReleased": "2026-09-17",
   "licenseFile": "https://raw.githubusercontent.com/evcallia/hubitat/refs/heads/main/LICENSE",
   "documentationLink": "https://github.com/evcallia/hubitat/blob/main/apps/schedule-manager/README.md",
   "communityLink": "https://community.hubitat.com/t/release-schedule-manager-app/145646",
